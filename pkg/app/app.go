@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/loilo-inc/bistro/pkg/bistro"
 	"github.com/loilo-inc/bistro/pkg/dpkg"
@@ -22,9 +24,9 @@ func CreateCLI() {
 }
 
 func (c *app) command() *cli.Command {
-	outputFlag := func() cli.Flag {
+	outRootfs := func() cli.Flag {
 		return &cli.StringFlag{
-			Name:     "output",
+			Name:     "out",
 			Aliases:  []string{"o"},
 			Usage:    "Destination root filesystem directory",
 			Required: true,
@@ -39,23 +41,49 @@ func (c *app) command() *cli.Command {
 				Usage: "Collect installed Debian packages",
 				Commands: []*cli.Command{
 					{
-						Name:      "record",
-						Usage:     "Run a command and collect newly installed packages",
-						ArgsUsage: "-- COMMAND [ARGS...]",
-						Flags:     []cli.Flag{outputFlag()},
+						Name:  "save",
+						Usage: "Save the list of installed Debian packages",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:     "out",
+								Aliases:  []string{"o"},
+								Usage:    "Output file for the list of installed Debian packages",
+								Required: true,
+							},
+						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							args := cmd.Args().Slice()
 							if len(args) == 0 {
-								return fmt.Errorf("dpkg record requires a command")
+								return fmt.Errorf("dpkg save requires a command")
 							}
-							return c.DpkgRecord(cmd.String("output"), args[0], args[1:]...)
+							return c.DpkgSave(cmd.String("out"))
+						},
+					},
+					{
+						Name:  "patch",
+						Usage: "Patch the root filesystem with a list of installed Debian packages",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:     "before",
+								Usage:    "Input file containing the list of installed Debian packages",
+								Required: true,
+							},
+							&cli.StringFlag{
+								Name:     "out",
+								Aliases:  []string{"o"},
+								Usage:    "Destination root filesystem directory",
+								Required: true,
+							},
+						},
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							return c.DpkgPatch(cmd.String("before"), cmd.String("out"))
 						},
 					},
 					{
 						Name:      "collect",
 						Usage:     "Collect files and metadata for installed packages",
 						ArgsUsage: "PACKAGE [PACKAGE...]",
-						Flags:     []cli.Flag{outputFlag()},
+						Flags:     []cli.Flag{outRootfs()},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							if cmd.Args().Len() == 0 {
 								return fmt.Errorf("dpkg collect requires at least one package")
@@ -73,7 +101,7 @@ func (c *app) command() *cli.Command {
 						Name:      "collect",
 						Usage:     "Collect packages owning an executable's shared libraries",
 						ArgsUsage: "EXECUTABLE",
-						Flags:     []cli.Flag{outputFlag()},
+						Flags:     []cli.Flag{outRootfs()},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							if cmd.Args().Len() != 1 {
 								return fmt.Errorf("ldd collect requires exactly one executable")
@@ -102,14 +130,40 @@ func CreateCli() *app {
 	}
 }
 
-func (c *app) DpkgRecord(root string, cmdName string, cmdArgs ...string) error {
-	recorder := bistro.CreateRecorder(c.dpkg, c.ldd)
-	baker := bistro.CreateBaker(c.dpkg, c.ldd)
-	packages, err := recorder.RecordSubcommand(os.Stdout, cmdName, cmdArgs...)
+type PackageList struct {
+	Packages []*dpkg.Package `json:"packages"`
+}
+
+func (c *app) DpkgSave(outFile string) error {
+	list, err := c.dpkg.ListPackages()
 	if err != nil {
 		return err
 	}
-	return baker.CreateRootFS(root, packages)
+	if err := os.MkdirAll(filepath.Dir(outFile), 0755); err != nil {
+		return err
+	}
+	jsonData, err := json.Marshal(&PackageList{Packages: list})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(outFile, jsonData, 0644)
+}
+
+func (c *app) DpkgPatch(inFile string, root string) error {
+	jsonData, err := os.ReadFile(inFile)
+	if err != nil {
+		return err
+	}
+	var pkgList PackageList
+	if err := json.Unmarshal(jsonData, &pkgList); err != nil {
+		return err
+	}
+	baker := bistro.CreateBaker(c.dpkg, c.ldd)
+	changed, err := baker.CalcDiff(pkgList.Packages)
+	if err != nil {
+		return err
+	}
+	return baker.CreateRootFS(root, changed)
 }
 
 func (c *app) DpkgCollect(dstRoot string, packages ...[]string) error {

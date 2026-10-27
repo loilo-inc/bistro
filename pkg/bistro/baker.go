@@ -12,6 +12,7 @@ import (
 
 type Baker interface {
 	CreateRootFS(dstDir string, dpkgList []*dpkg.Package) error
+	CalcDiff(before []*dpkg.Package) ([]*dpkg.Package, error)
 }
 
 type baker struct {
@@ -102,4 +103,56 @@ func copyFile(srcPath string, dstRoot string) error {
 		return err
 	}
 	return nil
+}
+
+func (r *baker) CalcDiff(before []*dpkg.Package) ([]*dpkg.Package, error) {
+	dpkgListAfter, err := r.dpkg.ListPackages()
+	if err != nil {
+		return nil, err
+	}
+	packages := make(map[string]struct{}, len(before))
+	for _, pkg := range before {
+		packages[pkg.Package] = struct{}{}
+	}
+	added, removed, err := diffPackages(before, dpkgListAfter)
+	if err != nil {
+		return nil, err
+	}
+	for _, pkg := range removed {
+		delete(packages, pkg.Package)
+	}
+	var based []*dpkg.Package
+	for _, pkg := range before {
+		if _, ok := packages[pkg.Package]; ok {
+			based = append(based, pkg)
+		}
+	}
+	based = append(based, added...)
+	return based, nil
+}
+
+func diffPackages(before []*dpkg.Package, after []*dpkg.Package) (
+	added []*dpkg.Package, removed []*dpkg.Package, err error,
+) {
+	beforeList := before
+	afterList := after
+	beforeMap := make(map[string]*dpkg.Package)
+	for _, pkg := range beforeList {
+		beforeMap[pkg.Package] = pkg
+	}
+	afterMap := make(map[string]*dpkg.Package)
+	for _, pkg := range afterList {
+		afterMap[pkg.Package] = pkg
+	}
+	for pkgName, pkg := range afterMap {
+		if _, ok := beforeMap[pkgName]; !ok {
+			added = append(added, pkg)
+		}
+	}
+	for pkgName, pkg := range beforeMap {
+		if _, ok := afterMap[pkgName]; !ok {
+			removed = append(removed, pkg)
+		}
+	}
+	return added, removed, nil
 }

@@ -9,7 +9,9 @@ A Build utility to bake distroless image.
 Hooking script and trace `.deb` package installations, creating rootfs.
 
 ```bash
-bistro dpkg record -o /tmp/rootfs -- apt install libssl-dev libyaml-dev -y
+bistro dpkg save -o /tmp/berofe-pkgs.json
+apt install libssl-dev
+bistro dpkg patch --before /tmp/before-pkgs.json -o /tmp/rootfs
 ```
 
 is (mostly) equivalent to:
