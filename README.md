@@ -3,7 +3,6 @@ bistro
 
 A Build utility to bake distroless image.
 
-
 ## Usage
 
 Hooking script and trace `.deb` package installations, creating rootfs.

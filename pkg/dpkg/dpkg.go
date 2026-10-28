@@ -36,7 +36,7 @@ type OwnedFile struct {
 }
 
 func (b *dpkg) ListPackages(packages ...[]string) (dpkgList []*Package, err error) {
-	args := []string{"-W", "-f=${Package}\t${Version}\t${Architecture}\n"}
+	args := []string{"-W", "-f=${binary:Package}\t${Version}\t${Architecture}\n"}
 	for _, pkgGroup := range packages {
 		args = append(args, pkgGroup...)
 	}
@@ -87,20 +87,7 @@ func (b *dpkg) Search(pattern string) (packages []*OwnedFile, err error) {
 	if err != nil {
 		return nil, err
 	}
-	lines := parseColonSplitData(out)
-	packages = make([]*OwnedFile, 0, len(lines))
-	for _, row := range lines {
-		if len(row) < 2 {
-			continue
-		}
-		packageName := strings.TrimSpace(row[0])
-		file := strings.TrimSpace(row[1])
-		packages = append(packages, &OwnedFile{
-			Package: packageName,
-			File:    file,
-		})
-	}
-	return packages, nil
+	return parseSearchData(out), nil
 }
 
 func parseTabSplitData(data []byte) [][]string {
@@ -115,14 +102,25 @@ func parseTabSplitData(data []byte) [][]string {
 	return result
 }
 
-func parseColonSplitData(data []byte) [][]string {
+func parseSearchData(data []byte) []*OwnedFile {
+	// Ex) libc6:arm64: /usr/lib/aarch64-linux-gnu/gconv/GB18030.so
 	lines := strings.Split(string(data), "\n")
-	result := make([][]string, 0, len(lines))
+	result := make([]*OwnedFile, 0, len(lines))
 	for _, line := range lines {
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		result = append(result, strings.SplitN(line, ":", 2))
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		lib := strings.TrimSuffix(parts[0], ":")
+		path := strings.TrimSpace(parts[1])
+		result = append(result, &OwnedFile{
+			Package: lib,
+			File:    path,
+		})
 	}
 	return result
 }

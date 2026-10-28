@@ -52,10 +52,6 @@ func (c *app) command() *cli.Command {
 							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							args := cmd.Args().Slice()
-							if len(args) == 0 {
-								return fmt.Errorf("dpkg save requires a command")
-							}
 							return c.DpkgSave(cmd.String("out"))
 						},
 					},
@@ -88,7 +84,7 @@ func (c *app) command() *cli.Command {
 							if cmd.Args().Len() == 0 {
 								return fmt.Errorf("dpkg collect requires at least one package")
 							}
-							return c.DpkgCollect(cmd.String("output"), cmd.Args().Slice())
+							return c.DpkgCollect(cmd.String("out"), cmd.Args().Slice())
 						},
 					},
 				},
@@ -106,7 +102,7 @@ func (c *app) command() *cli.Command {
 							if cmd.Args().Len() != 1 {
 								return fmt.Errorf("ldd collect requires exactly one executable")
 							}
-							return c.LddCollect(cmd.String("output"), cmd.Args().First())
+							return c.LddCollect(cmd.String("out"), cmd.Args().First())
 						},
 					},
 				},
@@ -159,11 +155,18 @@ func (c *app) DpkgPatch(inFile string, root string) error {
 		return err
 	}
 	baker := bistro.CreateBaker(c.dpkg, c.ldd)
-	changed, err := baker.CalcDiff(pkgList.Packages)
+	after, err := c.dpkg.ListPackages()
 	if err != nil {
 		return err
 	}
-	return baker.CreateRootFS(root, changed)
+	diff, err := dpkg.DiffPackages(pkgList.Packages, after)
+	if err != nil {
+		return err
+	}
+	var copyList []*dpkg.Package
+	copyList = append(copyList, diff.Added...)
+	copyList = append(copyList, diff.Changed...)
+	return baker.CreateRootFS(root, copyList)
 }
 
 func (c *app) DpkgCollect(dstRoot string, packages ...[]string) error {

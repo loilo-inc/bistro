@@ -67,10 +67,11 @@ func parseLddResult(data []byte) (*LinkInfo, error) {
 			continue
 		}
 		lib := strings.TrimSpace(parts[0])
-		path := strings.TrimSpace(strings.Split(parts[1], " ")[0])
-		if path == LddNotFound {
+		target := strings.TrimSpace(parts[1])
+		if target == LddNotFound {
 			info.BrokenLibs = append(info.BrokenLibs, lib)
 		} else {
+			path, _, _ := strings.Cut(target, " ")
 			info.Libs = append(info.Libs, Library{
 				Library: lib,
 				Path:    path,
