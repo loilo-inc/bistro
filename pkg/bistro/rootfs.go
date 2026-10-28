@@ -1,4 +1,4 @@
-package rootfs
+package bistro
 
 import (
 	"archive/tar"
@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-type FS interface {
+type RootFS interface {
 	// Copy copies the file or directory at the given absolute path into the root filesystem.
 	Copy(path string) error
 	// Add adds a file with the given content and mode to the root filesystem.
@@ -20,23 +20,23 @@ type FS interface {
 	Close() error
 }
 
-type fs struct {
+type rootFS struct {
 	copied    map[string]struct{}
 	resolving map[string]struct{}
 	tw        *tar.Writer
 }
 
-var _ FS = &fs{}
+var _ RootFS = &rootFS{}
 
-func New(out io.Writer) FS {
-	return &fs{
+func NewRootFS(out io.Writer) RootFS {
+	return &rootFS{
 		tw:        tar.NewWriter(out),
 		copied:    make(map[string]struct{}),
 		resolving: make(map[string]struct{}),
 	}
 }
 
-func (r *fs) Copy(path string) error {
+func (r *rootFS) Copy(path string) error {
 	if !filepath.IsAbs(path) {
 		return errors.New("path must be absolute")
 	}
@@ -57,7 +57,7 @@ func (r *fs) Copy(path string) error {
 	return nil
 }
 
-func (r *fs) Add(path string, content []byte, mode os.FileMode) error {
+func (r *rootFS) Add(path string, content []byte, mode os.FileMode) error {
 	header := &tar.Header{
 		Name:    strings.TrimPrefix(filepath.ToSlash(path), "/"),
 		Mode:    int64(mode),
@@ -71,11 +71,11 @@ func (r *fs) Add(path string, content []byte, mode os.FileMode) error {
 	return err
 }
 
-func (r *fs) Close() error {
+func (r *rootFS) Close() error {
 	return r.tw.Close()
 }
 
-func (r *fs) handleSubdir(path string, origPath string) (terminate bool, err error) {
+func (r *rootFS) handleSubdir(path string, origPath string) (terminate bool, err error) {
 	lstat, err := os.Lstat(path)
 	if err != nil {
 		return false, err
@@ -99,7 +99,7 @@ func (r *fs) handleSubdir(path string, origPath string) (terminate bool, err err
 	return false, r.copyOne(path, "", lstat)
 }
 
-func (r *fs) copyLink(path string, link string, remaining string) error {
+func (r *rootFS) copyLink(path string, link string, remaining string) error {
 	if _, ok := r.resolving[path]; ok {
 		return errors.New("circular symlink detected")
 	}
@@ -115,7 +115,7 @@ func (r *fs) copyLink(path string, link string, remaining string) error {
 	return r.Copy(filepath.Join(target, remaining))
 }
 
-func (r *fs) copyOne(path string, link string, lstat os.FileInfo) (err error) {
+func (r *rootFS) copyOne(path string, link string, lstat os.FileInfo) (err error) {
 	defer func() {
 		if err == nil {
 			r.copied[path] = struct{}{}

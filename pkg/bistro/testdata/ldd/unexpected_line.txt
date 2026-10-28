@@ -1,0 +1,2 @@
+	linux-vdso.so.1 (0x00007ffd12340000)
+	unexpected output

@@ -4,27 +4,24 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-
-	"github.com/loilo-inc/bistro/pkg/dpkg"
-	"github.com/loilo-inc/bistro/pkg/ldd"
 )
 
 type Finder interface {
-	PackagesForExecutable(file string) ([]*dpkg.Package, error)
+	PackagesForExecutable(file string) ([]*Package, error)
 }
 
 type finder struct {
-	dpkg dpkg.Dpkg
-	ldd  ldd.Ldd
+	dpkg Dpkg
+	ldd  Ldd
 }
 
-func CreateFinder(dpkg dpkg.Dpkg, ldd ldd.Ldd) Finder {
+func CreateFinder(dpkg Dpkg, ldd Ldd) Finder {
 	return &finder{dpkg: dpkg, ldd: ldd}
 }
 
 var _ Finder = &finder{}
 
-func (b *finder) PackagesForExecutable(file string) ([]*dpkg.Package, error) {
+func (b *finder) PackagesForExecutable(file string) ([]*Package, error) {
 	if !filepath.IsAbs(file) {
 		return nil, errors.New("file path is not absolute: " + file)
 	}
@@ -33,7 +30,7 @@ func (b *finder) PackagesForExecutable(file string) ([]*dpkg.Package, error) {
 		return nil, err
 	}
 	var visitedPackages = make(map[string]struct{})
-	var packages []*dpkg.Package
+	var packages []*Package
 	for _, lib := range info.Libs {
 		pkg, err := b.CollectPackage(lib.Path)
 		if err != nil {
@@ -47,7 +44,7 @@ func (b *finder) PackagesForExecutable(file string) ([]*dpkg.Package, error) {
 	return packages, nil
 }
 
-func (b *finder) CollectPackage(libfile string) (*dpkg.Package, error) {
+func (b *finder) CollectPackage(libfile string) (*Package, error) {
 	realpath, err := realpath(libfile)
 	if err != nil {
 		return nil, err

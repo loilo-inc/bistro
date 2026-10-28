@@ -1,4 +1,4 @@
-package execer
+package bistro
 
 import "os/exec"
 

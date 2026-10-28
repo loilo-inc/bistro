@@ -1,13 +1,11 @@
-package ldd
+package bistro
 
 import (
 	"fmt"
 	"strings"
-
-	"github.com/loilo-inc/bistro/pkg/execer"
 )
 
-func CreateLdd(execer execer.Execer) Ldd {
+func CreateLdd(execer Execer) Ldd {
 	return &ldd{execer: execer}
 }
 
@@ -16,7 +14,7 @@ type Ldd interface {
 }
 
 type ldd struct {
-	execer execer.Execer
+	execer Execer
 }
 
 func (l *ldd) ListObjects(file string) (*LinkInfo, error) {

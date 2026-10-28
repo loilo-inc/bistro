@@ -8,9 +8,6 @@ import (
 	"path/filepath"
 
 	"github.com/loilo-inc/bistro/pkg/bistro"
-	"github.com/loilo-inc/bistro/pkg/dpkg"
-	"github.com/loilo-inc/bistro/pkg/execer"
-	"github.com/loilo-inc/bistro/pkg/ldd"
 	"github.com/urfave/cli/v3"
 )
 
@@ -112,14 +109,14 @@ func (c *app) command() *cli.Command {
 }
 
 type app struct {
-	dpkg dpkg.Dpkg
-	ldd  ldd.Ldd
+	dpkg bistro.Dpkg
+	ldd  bistro.Ldd
 }
 
 func CreateCli() *app {
-	execer := &execer.DefaultExecer{}
-	ldd := ldd.CreateLdd(execer)
-	dpkg := dpkg.CreateDpkg(execer)
+	execer := &bistro.DefaultExecer{}
+	ldd := bistro.CreateLdd(execer)
+	dpkg := bistro.CreateDpkg(execer)
 	return &app{
 		dpkg: dpkg,
 		ldd:  ldd,
@@ -127,7 +124,7 @@ func CreateCli() *app {
 }
 
 type PackageList struct {
-	Packages []*dpkg.Package `json:"packages"`
+	Packages []*bistro.Package `json:"packages"`
 }
 
 func (c *app) DpkgSave(outFile string) error {
@@ -159,31 +156,31 @@ func (c *app) DpkgPatch(inFile string, root string) error {
 	if err != nil {
 		return err
 	}
-	diff, err := dpkg.DiffPackages(pkgList.Packages, after)
+	diff, err := bistro.DiffPackages(pkgList.Packages, after)
 	if err != nil {
 		return err
 	}
-	var copyList []*dpkg.Package
+	var copyList []*bistro.Package
 	copyList = append(copyList, diff.Added...)
 	copyList = append(copyList, diff.Changed...)
 	return baker.CreateRootFS(root, copyList)
 }
 
-func (c *app) DpkgCollect(dstRoot string, packages ...[]string) error {
+func (c *app) DpkgCollect(outfile string, packages ...[]string) error {
 	list, err := c.dpkg.ListPackages(packages...)
 	if err != nil {
 		return err
 	}
 	baker := bistro.CreateBaker(c.dpkg, c.ldd)
-	return baker.CreateRootFS(dstRoot, list)
+	return baker.CreateRootFS(outfile, list)
 }
 
-func (c *app) LddCollect(dstRoot string, file string) error {
+func (c *app) LddCollect(outfile string, file string) error {
 	finder := bistro.CreateFinder(c.dpkg, c.ldd)
 	backedPackages, err := finder.PackagesForExecutable(file)
 	if err != nil {
 		return err
 	}
 	baker := bistro.CreateBaker(c.dpkg, c.ldd)
-	return baker.CreateRootFS(dstRoot, backedPackages)
+	return baker.CreateRootFS(outfile, backedPackages)
 }

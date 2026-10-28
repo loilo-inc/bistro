@@ -1,0 +1,3 @@
+	libmissing.so.1 => not found
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f2345000000)
+	libother.so.2 => not found

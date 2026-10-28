@@ -1,4 +1,4 @@
-package rootfs
+package bistro
 
 import (
 	"archive/tar"
@@ -75,7 +75,7 @@ func TestRootFSAdd(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var out bytes.Buffer
-			root := New(&out)
+			root := NewRootFS(&out)
 			require.NoError(t, root.Add(tt.path, tt.content, tt.mode))
 			// A following entry verifies that the content size and tar padding
 			// do not corrupt the next file.
@@ -118,7 +118,7 @@ func TestRootFSAddWriteErrors(t *testing.T) {
 		{"content", rootFSContentFailWriter{content: content, err: want}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			root := New(tt.writer)
+			root := NewRootFS(tt.writer)
 			assert.ErrorIs(t, root.Add("file", content, 0644), want)
 		})
 	}
@@ -132,7 +132,7 @@ func TestRootFSFilesAndDirectories(t *testing.T) {
 	writeRootFSFile(t, second, "data\n", 0640)
 	require.NoError(t, os.Chmod(filepath.Dir(first), 0750))
 	var out bytes.Buffer
-	root := New(&out)
+	root := NewRootFS(&out)
 	for _, name := range []string{first, second, first, filepath.Dir(first)} {
 		require.NoError(t, root.Copy(name))
 	}
@@ -199,7 +199,7 @@ func TestRootFSSymlinks(t *testing.T) {
 			}
 			requested := filepath.Join(dir, "alias", remaining)
 			var out bytes.Buffer
-			root := New(&out)
+			root := NewRootFS(&out)
 			for _, name := range []string{requested, requested, file} {
 				require.NoError(t, root.Copy(name))
 			}
@@ -229,7 +229,7 @@ func TestRootFSSymlinks(t *testing.T) {
 }
 
 func TestRootFSRejectsInvalidPaths(t *testing.T) {
-	root := New(io.Discard)
+	root := NewRootFS(io.Discard)
 	assert.Error(t, root.Copy("relative/file"))
 	assert.ErrorIs(t, root.Copy(filepath.Join(rootFSTempDir(t), "missing")), os.ErrNotExist)
 	require.NoError(t, root.Close())
@@ -251,7 +251,7 @@ func TestRootFSCircularSymlinks(t *testing.T) {
 			}
 			require.NoError(t, os.Symlink(target, filepath.Join(dir, "a")))
 			var out bytes.Buffer
-			root := New(&out)
+			root := NewRootFS(&out)
 			for range 2 {
 				require.ErrorContains(t, root.Copy(filepath.Join(dir, "a")), "circular symlink")
 			}
@@ -276,12 +276,12 @@ func (w *rootFSFailWriter) Write(p []byte) (int, error) {
 func TestRootFSWriteErrors(t *testing.T) {
 	want := errors.New("write failed")
 	t.Run("Copy", func(t *testing.T) {
-		root := New(&rootFSFailWriter{err: want})
+		root := NewRootFS(&rootFSFailWriter{err: want})
 		assert.ErrorIs(t, root.Copy(rootFSTempDir(t)), want)
 	})
 	t.Run("Close", func(t *testing.T) {
 		writer := &rootFSFailWriter{}
-		root := New(writer)
+		root := NewRootFS(writer)
 		file := filepath.Join(rootFSTempDir(t), "file")
 		writeRootFSFile(t, file, "content", 0644)
 		require.NoError(t, root.Copy(file))
