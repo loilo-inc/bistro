@@ -3,6 +3,7 @@ package bistro
 import (
 	"archive/tar"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -22,8 +23,13 @@ type RootFS interface {
 
 type rootFS struct {
 	copied    map[string]struct{}
-	resolving map[string]struct{}
+	resolving map[resolvingState]struct{}
 	tw        *tar.Writer
+}
+
+type resolvingState struct {
+	path      string
+	remaining string
 }
 
 var _ RootFS = &rootFS{}
@@ -32,7 +38,7 @@ func NewRootFS(out io.Writer) RootFS {
 	return &rootFS{
 		tw:        tar.NewWriter(out),
 		copied:    make(map[string]struct{}),
-		resolving: make(map[string]struct{}),
+		resolving: make(map[resolvingState]struct{}),
 	}
 }
 
@@ -100,11 +106,15 @@ func (r *rootFS) handleSubdir(path string, origPath string) (terminate bool, err
 }
 
 func (r *rootFS) copyLink(path string, link string, remaining string) error {
-	if _, ok := r.resolving[path]; ok {
-		return errors.New("circular symlink detected")
+	state := resolvingState{path: path, remaining: remaining}
+	if _, ok := r.resolving[state]; ok {
+		return fmt.Errorf("circular symlink detected: %s -> %s", path, link)
 	}
-	r.resolving[path] = struct{}{}
-	defer delete(r.resolving, path)
+	if len(r.resolving) >= 256 {
+		return fmt.Errorf("too many symlinks being resolved")
+	}
+	r.resolving[state] = struct{}{}
+	defer delete(r.resolving, state)
 
 	target := link
 	if !filepath.IsAbs(target) {

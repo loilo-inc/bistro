@@ -146,7 +146,10 @@ func (c *app) Patch(inFile string, outfile string) error {
 	var copyList []*bistro.Package
 	copyList = append(copyList, diff.Added...)
 	copyList = append(copyList, diff.Changed...)
-	return baker.CreateRootFS(outfile, copyList)
+	return baker.CreateRootFS(&bistro.BakeInput{
+		Out:      outfile,
+		DpkgList: copyList,
+	})
 }
 
 func (c *app) listInstalledPackages() ([]*bistro.Package, error) {
@@ -168,8 +171,16 @@ func (c *app) Collect(outfile string, packages ...[]string) error {
 	if err != nil {
 		return err
 	}
+	for _, pkg := range list {
+		if pkg.Status != "installed" {
+			return fmt.Errorf("'%s' is not installed", pkg.Package)
+		}
+	}
 	baker := bistro.CreateBaker(c.dpkg, c.ldd)
-	return baker.CreateRootFS(outfile, list)
+	return baker.CreateRootFS(&bistro.BakeInput{
+		Out:      outfile,
+		DpkgList: list,
+	})
 }
 
 func (c *app) Bundle(outfile string, file string) error {
@@ -179,5 +190,9 @@ func (c *app) Bundle(outfile string, file string) error {
 		return err
 	}
 	baker := bistro.CreateBaker(c.dpkg, c.ldd)
-	return baker.CreateRootFS(outfile, backedPackages)
+	return baker.CreateRootFS(&bistro.BakeInput{
+		Out:      outfile,
+		DpkgList: backedPackages,
+		Files:    []string{file},
+	})
 }

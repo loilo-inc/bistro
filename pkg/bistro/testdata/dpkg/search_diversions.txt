@@ -1,0 +1,7 @@
+diversion by other from: /usr/bin/tool
+diversion by other to: /usr/bin/tool.distrib
+local diversion from: /usr/bin/local-tool
+local diversion to: /usr/bin/local-tool.distrib
+example:amd64: /usr/bin/tool
+local-tool: /usr/bin/local-tool
+diversion-tool: /usr/bin/diversion-tool

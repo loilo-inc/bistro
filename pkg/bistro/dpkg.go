@@ -1,5 +1,7 @@
 package bistro
 
+import "strings"
+
 type Dpkg interface {
 	ListPackages(packages ...[]string) ([]*Package, error)
 	ListFiles(pkgName string) ([]string, error)
@@ -123,4 +125,22 @@ func DiffPackages(before []*Package, after []*Package) (
 		Removed: removed,
 		Changed: changed,
 	}, nil
+}
+
+func parseSearchData(data []byte) []*OwnedFile {
+	var result []*OwnedFile
+	for line := range strings.SplitSeq(string(data), "\n") {
+		// DefaultExecer fixes the locale to C, so diversion descriptions are English.
+		if strings.HasPrefix(line, "diversion by ") || strings.HasPrefix(line, "local diversion ") {
+			continue
+		}
+		owners, path, ok := strings.Cut(line, ": ")
+		if !ok || owners == "" || path == "" {
+			continue
+		}
+		for _, owner := range strings.Split(owners, ", ") {
+			result = append(result, &OwnedFile{Package: owner, File: path})
+		}
+	}
+	return result
 }

@@ -189,3 +189,54 @@ func TestDiffPackages(t *testing.T) {
 		})
 	}
 }
+
+func TestParseSearchData(t *testing.T) {
+	for _, tt := range []struct {
+		fixture string
+		want    []*OwnedFile
+	}{
+		{fixture: "empty.txt"},
+		{fixture: "blank_lines.txt"},
+		{fixture: "search_invalid.txt"},
+		{fixture: "search_diversions_only.txt"},
+		{
+			fixture: "search_single.txt",
+			want:    []*OwnedFile{{Package: "example", File: "/usr/share/example/file: with spaces"}},
+		},
+		{
+			fixture: "search_multiple.txt",
+			want: []*OwnedFile{
+				{Package: "libc6:amd64", File: "/usr/share/doc/libc6/copyright"},
+				{Package: "libc6:i386", File: "/usr/share/doc/libc6/copyright"},
+			},
+		},
+		{
+			fixture: "search_data.txt",
+			want: []*OwnedFile{
+				{Package: "libc6:amd64", File: "/usr/share/doc/libc6/copyright"},
+				{Package: "libc6:i386", File: "/usr/share/doc/libc6/copyright"},
+				{Package: "example", File: "/usr/share/example/file: with spaces"},
+			},
+		},
+		{
+			fixture: "search_diversions.txt",
+			want: []*OwnedFile{
+				{Package: "example:amd64", File: "/usr/bin/tool"},
+				{Package: "local-tool", File: "/usr/bin/local-tool"},
+				{Package: "diversion-tool", File: "/usr/bin/diversion-tool"},
+			},
+		},
+		{
+			fixture: "search_whitespace.txt",
+			want: []*OwnedFile{
+				{Package: "example", File: "/usr/share/example/file "},
+				{Package: "example", File: "/usr/share/example/file\t"},
+				{Package: "example", File: "/usr/share/example/file: with, punctuation"},
+			},
+		},
+	} {
+		t.Run(tt.fixture, func(t *testing.T) {
+			assert.Equal(t, tt.want, parseSearchData(readDpkgFixture(t, tt.fixture)))
+		})
+	}
+}

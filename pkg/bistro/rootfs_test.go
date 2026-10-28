@@ -235,25 +235,49 @@ func TestRootFSRejectsInvalidPaths(t *testing.T) {
 	require.NoError(t, root.Close())
 }
 
+func TestRootFSRepeatedSymlink(t *testing.T) {
+	dir := rootFSTempDir(t)
+	file := filepath.Join(dir, "file")
+	link := filepath.Join(dir, "selfdir")
+	writeRootFSFile(t, file, "resolved content", 0644)
+	require.NoError(t, os.Symlink(".", link))
+
+	var out bytes.Buffer
+	root := NewRootFS(&out)
+	for range 2 {
+		require.NoError(t, root.Copy(filepath.Join(dir, "selfdir", "selfdir", "file")))
+	}
+	require.NoError(t, root.Close())
+
+	entries := readRootFSTar(t, out.Bytes())
+	require.Contains(t, entries, rootFSArchiveName(file))
+	assert.Equal(t, "resolved content", entries[rootFSArchiveName(file)].body)
+	require.Contains(t, entries, rootFSArchiveName(link))
+	assert.Equal(t, byte(tar.TypeSymlink), entries[rootFSArchiveName(link)].header.Typeflag)
+	assert.Equal(t, ".", entries[rootFSArchiveName(link)].header.Linkname)
+	for name := range entries {
+		assert.False(t, strings.HasPrefix(name, rootFSArchiveName(link)+"/"), "entry under symlink: %s", name)
+	}
+}
+
 func TestRootFSCircularSymlinks(t *testing.T) {
-	for _, self := range []bool{false, true} {
-		name := "two links"
-		if self {
-			name = "self link"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, tt := range []struct {
+		name, target, wantErr string
+	}{
+		{name: "two links", target: "b", wantErr: "circular symlink"},
+		{name: "self link", target: "a", wantErr: "circular symlink"},
+		{name: "growing remaining path", target: "a/subdir", wantErr: "too many symlinks"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
 			dir := rootFSTempDir(t)
-			target := "b"
-			if self {
-				target = "a"
-			} else {
+			if tt.target == "b" {
 				require.NoError(t, os.Symlink("a", filepath.Join(dir, "b")))
 			}
-			require.NoError(t, os.Symlink(target, filepath.Join(dir, "a")))
+			require.NoError(t, os.Symlink(tt.target, filepath.Join(dir, "a")))
 			var out bytes.Buffer
 			root := NewRootFS(&out)
 			for range 2 {
-				require.ErrorContains(t, root.Copy(filepath.Join(dir, "a")), "circular symlink")
+				require.ErrorContains(t, root.Copy(filepath.Join(dir, "a")), tt.wantErr)
 			}
 			file := filepath.Join(dir, "file")
 			writeRootFSFile(t, file, "after error", 0644)

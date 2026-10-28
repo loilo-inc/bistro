@@ -1,0 +1,3 @@
+example: /usr/share/example/file 
+example: /usr/share/example/file	
+example: /usr/share/example/file: with, punctuation

@@ -1,0 +1,4 @@
+diversion by other from: /usr/bin/tool
+diversion by other to: /usr/bin/tool.distrib
+local diversion from: /usr/bin/local-tool
+local diversion to: /usr/bin/local-tool.distrib
