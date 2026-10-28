@@ -1,0 +1,3 @@
+libc6:amd64, libc6:i386: /usr/share/example/copyright
+
+example: /usr/share/example/file: with spaces

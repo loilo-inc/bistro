@@ -1,9 +1,5 @@
 package bistro
 
-import (
-	"strings"
-)
-
 type Dpkg interface {
 	ListPackages(packages ...[]string) ([]*Package, error)
 	ListFiles(pkgName string) ([]string, error)
@@ -26,6 +22,7 @@ type Package struct {
 	Package      string `json:"package"`
 	Version      string `json:"version"`
 	Architecture string `json:"architecture"`
+	Status       string `json:"status"`
 }
 
 type OwnedFile struct {
@@ -34,7 +31,7 @@ type OwnedFile struct {
 }
 
 func (b *dpkg) ListPackages(packages ...[]string) (dpkgList []*Package, err error) {
-	args := []string{"-W", "-f=${binary:Package}\t${Version}\t${Architecture}\n"}
+	args := []string{"-W", "-f=${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n"}
 	for _, pkgGroup := range packages {
 		args = append(args, pkgGroup...)
 	}
@@ -45,31 +42,25 @@ func (b *dpkg) ListPackages(packages ...[]string) (dpkgList []*Package, err erro
 	tsv := parseTabSplitData(out)
 	dpkgList = make([]*Package, 0, len(tsv))
 	for _, row := range tsv {
-		if len(row) < 3 {
+		if len(row) < 4 {
 			continue
 		}
 		dpkgList = append(dpkgList, &Package{
 			Package:      row[0],
 			Version:      row[1],
 			Architecture: row[2],
+			Status:       row[3],
 		})
 	}
 	return dpkgList, nil
 }
 
 func (b *dpkg) ListFiles(pkgName string) (files []string, err error) {
-	out, err := b.execer.Output("dpkg-query", "-L", pkgName)
+	out, err := b.execer.Output("dpkg-query", "-W", "-f=${db-fsys:Files}", pkgName)
 	if err != nil {
 		return nil, err
 	}
-	lines := strings.SplitSeq(string(out), "\n")
-	for line := range lines {
-		if line == "" {
-			continue
-		}
-		files = append(files, line)
-	}
-	return files, nil
+	return parseLines(out), nil
 }
 
 func (b *dpkg) PackageStatus(pkgName string) ([]byte, error) {
@@ -86,41 +77,6 @@ func (b *dpkg) Search(pattern string) (packages []*OwnedFile, err error) {
 		return nil, err
 	}
 	return parseSearchData(out), nil
-}
-
-func parseTabSplitData(data []byte) [][]string {
-	lines := strings.Split(string(data), "\n")
-	result := make([][]string, 0, len(lines))
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		result = append(result, strings.Split(line, "\t"))
-	}
-	return result
-}
-
-func parseSearchData(data []byte) []*OwnedFile {
-	// Ex) libc6:arm64: /usr/lib/aarch64-linux-gnu/gconv/GB18030.so
-	lines := strings.Split(string(data), "\n")
-	result := make([]*OwnedFile, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, " ", 2)
-		if len(parts) < 2 {
-			continue
-		}
-		lib := strings.TrimSuffix(parts[0], ":")
-		path := strings.TrimSpace(parts[1])
-		result = append(result, &OwnedFile{
-			Package: lib,
-			File:    path,
-		})
-	}
-	return result
 }
 
 type PackageDiff struct {

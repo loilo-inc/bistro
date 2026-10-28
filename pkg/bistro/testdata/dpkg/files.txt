@@ -1,0 +1,6 @@
+ /.
+ /usr
+
+ /usr/share/example/file with spaces
+ /usr/share/example/trailing 
+ /usr/share/example/tab	

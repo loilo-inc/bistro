@@ -21,18 +21,28 @@ func CreateBaker(dpkg Dpkg, ldd Ldd) Baker {
 	return &baker{dpkg: dpkg, ldd: ldd}
 }
 
-func (b *baker) CreateRootFS(out string, dpkgList []*Package) error {
-	tmpFile, err := os.CreateTemp("", "rootfs")
+func (b *baker) CreateRootFS(out string, dpkgList []*Package) (err error) {
+	tmpFile, err := os.CreateTemp(filepath.Dir(out), "rootfs")
 	if err != nil {
 		return err
 	}
+	defer tmpFile.Close()
+	defer func() {
+		if err != nil {
+			os.Remove(tmpFile.Name())
+		}
+	}()
+
 	rootfs := NewRootFS(tmpFile)
-	defer rootfs.Close()
 
 	for _, pkg := range dpkgList {
 		if err := b.writePackageMetadata(rootfs, pkg); err != nil {
 			return err
 		}
+	}
+
+	if err := rootfs.Close(); err != nil {
+		return err
 	}
 
 	if err := os.Rename(tmpFile.Name(), out); err != nil {

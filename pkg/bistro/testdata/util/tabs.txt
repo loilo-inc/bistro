@@ -1,0 +1,4 @@
+libc6:amd64	2.36-9	amd64	installed
+
+	middle		last	
+single field

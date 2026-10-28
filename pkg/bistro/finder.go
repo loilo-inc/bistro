@@ -29,6 +29,10 @@ func (b *finder) PackagesForExecutable(file string) ([]*Package, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(info.BrokenLibs) > 0 {
+		return nil, errors.New("broken libraries found")
+	}
+
 	var visitedPackages = make(map[string]struct{})
 	var packages []*Package
 	for _, lib := range info.Libs {
@@ -50,6 +54,9 @@ func (b *finder) CollectPackage(libfile string) (*Package, error) {
 		return nil, err
 	}
 	result, err := b.dpkg.Search(realpath)
+	if err != nil {
+		return nil, err
+	}
 	if len(result) == 0 {
 		return nil, errors.New("library not found in any package: " + realpath)
 	}
@@ -59,6 +66,11 @@ func (b *finder) CollectPackage(libfile string) (*Package, error) {
 	}
 	if len(pkg) == 0 {
 		return nil, errors.New("package not found: " + result[0].Package)
+	}
+	for _, p := range pkg {
+		if p.Status != "installed" {
+			return nil, errors.New("package is not installed: " + p.Package)
+		}
 	}
 	return pkg[0], nil
 }

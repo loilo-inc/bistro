@@ -1,0 +1,8 @@
+ /usr
+
+ /usr/file with spaces
+ /usr/trailing 
+ /usr/tab	
+  /two-leading-spaces
+	leading-tab
+ /last

@@ -1,0 +1,6 @@
+Package: example
+Status: install ok installed
+Description: example
+ continuation line
+ .
+ another paragraph

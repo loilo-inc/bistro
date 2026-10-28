@@ -1,0 +1,5 @@
+
+libc6:amd64, libc6:i386: /usr/share/doc/libc6/copyright
+
+invalid line
+example: /usr/share/example/file: with spaces

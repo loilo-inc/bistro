@@ -1,0 +1,1 @@
+example: /usr/share/example/file: with spaces

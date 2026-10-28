@@ -25,7 +25,7 @@ func (c *app) command() *cli.Command {
 		return &cli.StringFlag{
 			Name:     "out",
 			Aliases:  []string{"o"},
-			Usage:    "Destination root filesystem directory",
+			Usage:    "Output root filesystem tar archive",
 			Required: true,
 		}
 	}
@@ -34,74 +34,57 @@ func (c *app) command() *cli.Command {
 		Usage: "Build a distroless root filesystem",
 		Commands: []*cli.Command{
 			{
-				Name:  "dpkg",
-				Usage: "Collect installed Debian packages",
-				Commands: []*cli.Command{
-					{
-						Name:  "save",
-						Usage: "Save the list of installed Debian packages",
-						Flags: []cli.Flag{
-							&cli.StringFlag{
-								Name:     "out",
-								Aliases:  []string{"o"},
-								Usage:    "Output file for the list of installed Debian packages",
-								Required: true,
-							},
-						},
-						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return c.DpkgSave(cmd.String("out"))
-						},
+				Name:  "save",
+				Usage: "Save the list of installed Debian packages",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "out",
+						Aliases:  []string{"o"},
+						Usage:    "Output file for the list of installed Debian packages",
+						Required: true,
 					},
-					{
-						Name:  "patch",
-						Usage: "Patch the root filesystem with a list of installed Debian packages",
-						Flags: []cli.Flag{
-							&cli.StringFlag{
-								Name:     "before",
-								Usage:    "Input file containing the list of installed Debian packages",
-								Required: true,
-							},
-							&cli.StringFlag{
-								Name:     "out",
-								Aliases:  []string{"o"},
-								Usage:    "Destination root filesystem directory",
-								Required: true,
-							},
-						},
-						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return c.DpkgPatch(cmd.String("before"), cmd.String("out"))
-						},
-					},
-					{
-						Name:      "collect",
-						Usage:     "Collect files and metadata for installed packages",
-						ArgsUsage: "PACKAGE [PACKAGE...]",
-						Flags:     []cli.Flag{outRootfs()},
-						Action: func(ctx context.Context, cmd *cli.Command) error {
-							if cmd.Args().Len() == 0 {
-								return fmt.Errorf("dpkg collect requires at least one package")
-							}
-							return c.DpkgCollect(cmd.String("out"), cmd.Args().Slice())
-						},
-					},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return c.Save(cmd.String("out"))
 				},
 			},
 			{
-				Name:  "ldd",
-				Usage: "Collect shared library packages for an executable",
-				Commands: []*cli.Command{
-					{
-						Name:      "collect",
-						Usage:     "Collect packages owning an executable's shared libraries",
-						ArgsUsage: "EXECUTABLE",
-						Flags:     []cli.Flag{outRootfs()},
-						Action: func(ctx context.Context, cmd *cli.Command) error {
-							if cmd.Args().Len() != 1 {
-								return fmt.Errorf("ldd collect requires exactly one executable")
-							}
-							return c.LddCollect(cmd.String("out"), cmd.Args().First())
-						},
+				Name:  "patch",
+				Usage: "Create a root filesystem tar archive from added or updated packages",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "before",
+						Usage:    "Input file containing the list of installed Debian packages",
+						Required: true,
 					},
+					outRootfs(),
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return c.Patch(cmd.String("before"), cmd.String("out"))
+				},
+			},
+			{
+				Name:      "collect",
+				Usage:     "Collect files and metadata for installed packages",
+				ArgsUsage: "PACKAGE [PACKAGE...]",
+				Flags:     []cli.Flag{outRootfs()},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() == 0 {
+						return fmt.Errorf("collect requires at least one package")
+					}
+					return c.Collect(cmd.String("out"), cmd.Args().Slice())
+				},
+			},
+			{
+				Name:      "bundle",
+				Usage:     "Collect packages owning an executable's shared libraries",
+				ArgsUsage: "EXECUTABLE",
+				Flags:     []cli.Flag{outRootfs()},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 1 {
+						return fmt.Errorf("bundle requires exactly one executable")
+					}
+					return c.Bundle(cmd.String("out"), cmd.Args().First())
 				},
 			},
 		},
@@ -127,8 +110,8 @@ type PackageList struct {
 	Packages []*bistro.Package `json:"packages"`
 }
 
-func (c *app) DpkgSave(outFile string) error {
-	list, err := c.dpkg.ListPackages()
+func (c *app) Save(outFile string) error {
+	list, err := c.listInstalledPackages()
 	if err != nil {
 		return err
 	}
@@ -142,7 +125,7 @@ func (c *app) DpkgSave(outFile string) error {
 	return os.WriteFile(outFile, jsonData, 0644)
 }
 
-func (c *app) DpkgPatch(inFile string, root string) error {
+func (c *app) Patch(inFile string, outfile string) error {
 	jsonData, err := os.ReadFile(inFile)
 	if err != nil {
 		return err
@@ -152,7 +135,7 @@ func (c *app) DpkgPatch(inFile string, root string) error {
 		return err
 	}
 	baker := bistro.CreateBaker(c.dpkg, c.ldd)
-	after, err := c.dpkg.ListPackages()
+	after, err := c.listInstalledPackages()
 	if err != nil {
 		return err
 	}
@@ -163,10 +146,24 @@ func (c *app) DpkgPatch(inFile string, root string) error {
 	var copyList []*bistro.Package
 	copyList = append(copyList, diff.Added...)
 	copyList = append(copyList, diff.Changed...)
-	return baker.CreateRootFS(root, copyList)
+	return baker.CreateRootFS(outfile, copyList)
 }
 
-func (c *app) DpkgCollect(outfile string, packages ...[]string) error {
+func (c *app) listInstalledPackages() ([]*bistro.Package, error) {
+	allList, err := c.dpkg.ListPackages()
+	if err != nil {
+		return nil, err
+	}
+	var installed []*bistro.Package
+	for _, pkg := range allList {
+		if pkg.Status == "installed" {
+			installed = append(installed, pkg)
+		}
+	}
+	return installed, nil
+}
+
+func (c *app) Collect(outfile string, packages ...[]string) error {
 	list, err := c.dpkg.ListPackages(packages...)
 	if err != nil {
 		return err
@@ -175,7 +172,7 @@ func (c *app) DpkgCollect(outfile string, packages ...[]string) error {
 	return baker.CreateRootFS(outfile, list)
 }
 
-func (c *app) LddCollect(outfile string, file string) error {
+func (c *app) Bundle(outfile string, file string) error {
 	finder := bistro.CreateFinder(c.dpkg, c.ldd)
 	backedPackages, err := finder.PackagesForExecutable(file)
 	if err != nil {
