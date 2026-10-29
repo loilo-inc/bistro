@@ -34,7 +34,7 @@ func TestDpkgListPackages(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			calls := 0
-			d := CreateDpkg(dpkgTestExecer(func(name string, args ...string) ([]byte, error) {
+			d := NewDpkg(dpkgTestExecer(func(name string, args ...string) ([]byte, error) {
 				calls++
 				assert.Equal(t, "dpkg-query", name)
 				wantArgs := append([]string{"-W", "-f=${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n"}, tt.args...)
@@ -54,7 +54,7 @@ func TestDpkgListPackages(t *testing.T) {
 }
 
 func TestDpkgListFiles(t *testing.T) {
-	d := CreateDpkg(dpkgTestExecer(func(name string, args ...string) ([]byte, error) {
+	d := NewDpkg(dpkgTestExecer(func(name string, args ...string) ([]byte, error) {
 		assert.Equal(t, "dpkg-query", name)
 		assert.Equal(t, []string{"-W", "-f=${db-fsys:Files}", "example:amd64"}, args)
 		// db-fsys:Files prefixes each filesystem entry with one space.
@@ -66,7 +66,7 @@ func TestDpkgListFiles(t *testing.T) {
 }
 
 func TestDpkgSearch(t *testing.T) {
-	d := CreateDpkg(dpkgTestExecer(func(name string, args ...string) ([]byte, error) {
+	d := NewDpkg(dpkgTestExecer(func(name string, args ...string) ([]byte, error) {
 		assert.Equal(t, "dpkg-query", name)
 		assert.Equal(t, []string{"-S", "/usr/share/example/*"}, args)
 		return readDpkgFixture(t, "search.txt"), nil
@@ -100,7 +100,7 @@ func TestDpkgMetadata(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			data := readDpkgFixture(t, tt.fixture)
-			d := CreateDpkg(dpkgTestExecer(func(name string, args ...string) ([]byte, error) {
+			d := NewDpkg(dpkgTestExecer(func(name string, args ...string) ([]byte, error) {
 				assert.Equal(t, "dpkg-query", name)
 				assert.Equal(t, tt.args, args)
 				return data, nil
@@ -114,7 +114,7 @@ func TestDpkgMetadata(t *testing.T) {
 
 func TestDpkgCommandErrors(t *testing.T) {
 	commandErr := errors.New("dpkg-query failed")
-	d := CreateDpkg(dpkgTestExecer(func(string, ...string) ([]byte, error) {
+	d := NewDpkg(dpkgTestExecer(func(string, ...string) ([]byte, error) {
 		return nil, commandErr
 	}))
 	t.Run("list packages", func(t *testing.T) {
@@ -145,7 +145,7 @@ func TestDpkgCommandErrors(t *testing.T) {
 }
 
 func TestDpkgEmptyOutput(t *testing.T) {
-	d := CreateDpkg(dpkgTestExecer(func(string, ...string) ([]byte, error) {
+	d := NewDpkg(dpkgTestExecer(func(string, ...string) ([]byte, error) {
 		return readDpkgFixture(t, "blank_lines.txt"), nil
 	}))
 	packages, err := d.ListPackages()

@@ -23,7 +23,7 @@ type ExeDependency struct {
 	Package *Package
 }
 
-func CreateFinder(dpkg Dpkg, ldd Ldd) Finder {
+func NewFinder(dpkg Dpkg, ldd Ldd) Finder {
 	return &finder{dpkg: dpkg, ldd: ldd,
 		lddCache:    map[string]*LinkInfo{},
 		pkgCache:    map[string]*Package{},

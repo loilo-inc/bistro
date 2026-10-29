@@ -16,7 +16,7 @@ type dpkg struct {
 
 var _ Dpkg = &dpkg{}
 
-func CreateDpkg(execer Execer) Dpkg {
+func NewDpkg(execer Execer) Dpkg {
 	return &dpkg{execer: execer}
 }
 

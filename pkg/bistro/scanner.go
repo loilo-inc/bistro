@@ -6,6 +6,10 @@ import (
 	"path/filepath"
 )
 
+type Scanner interface {
+	Scan(origPath string) ([]*ElfDependency, error)
+}
+
 type scanner struct {
 	ldd       Ldd
 	dpkg      Dpkg
@@ -14,8 +18,10 @@ type scanner struct {
 	depsCache map[string]*ElfDependency
 }
 
-func CreateScanner(ldd Ldd, dpkg Dpkg) *scanner {
-	finder := CreateFinder(dpkg, ldd)
+var _ Scanner = &scanner{}
+
+func NewScanner(ldd Ldd, dpkg Dpkg) Scanner {
+	finder := NewFinder(dpkg, ldd)
 	return &scanner{
 		ldd:       ldd,
 		dpkg:      dpkg,

@@ -16,7 +16,7 @@ type baker struct {
 
 var _ Baker = &baker{}
 
-func CreateBaker(dpkg Dpkg, ldd Ldd) Baker {
+func NewBaker(dpkg Dpkg, ldd Ldd) Baker {
 	return &baker{dpkg: dpkg, ldd: ldd}
 }
 

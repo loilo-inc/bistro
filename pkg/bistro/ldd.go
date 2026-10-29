@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-func CreateLdd(execer Execer) Ldd {
+func NewLdd(execer Execer) Ldd {
 	return &ldd{execer: execer}
 }
 

@@ -11,12 +11,16 @@ type Execer interface {
 	Output(name string, arg ...string) ([]byte, error)
 }
 
-type DefaultExecer struct {
+type defaultExecer struct {
 }
 
-var _ Execer = &DefaultExecer{}
+func NewExecer() Execer {
+	return &defaultExecer{}
+}
 
-func (e *DefaultExecer) Output(name string, arg ...string) ([]byte, error) {
+var _ Execer = &defaultExecer{}
+
+func (e *defaultExecer) Output(name string, arg ...string) ([]byte, error) {
 	cmd := exec.Command(name, arg...)
 	cmd.Stderr = os.Stderr
 	// Set environment variables to ensure consistent locale of dpkg-query

@@ -10,7 +10,7 @@ import (
 )
 
 func CreateCLI() {
-	app := CreateCli()
+	app := NewCli()
 	err := app.command().Run(context.Background(), os.Args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -61,22 +61,18 @@ type app struct {
 	ldd  bistro.Ldd
 }
 
-func CreateCli() *app {
-	execer := &bistro.DefaultExecer{}
-	ldd := bistro.CreateLdd(execer)
-	dpkg := bistro.CreateDpkg(execer)
+func NewCli() *app {
+	execer := bistro.NewExecer()
+	ldd := bistro.NewLdd(execer)
+	dpkg := bistro.NewDpkg(execer)
 	return &app{
 		dpkg: dpkg,
 		ldd:  ldd,
 	}
 }
 
-type PackageList struct {
-	Packages []*bistro.Package `json:"packages"`
-}
-
 func (c *app) Scan(paths ...string) error {
-	scanner := bistro.CreateScanner(c.ldd, c.dpkg)
+	scanner := bistro.NewScanner(c.ldd, c.dpkg)
 	var elfDeps []*bistro.ElfDependency
 	for _, path := range paths {
 		deps, err := scanner.Scan(path)
@@ -98,12 +94,12 @@ func (c *app) Scan(paths ...string) error {
 }
 
 func (c *app) Bundle(outfile string, file string) error {
-	scanner := bistro.CreateScanner(c.ldd, c.dpkg)
+	scanner := bistro.NewScanner(c.ldd, c.dpkg)
 	deps, err := scanner.Scan(file)
 	if err != nil {
 		return err
 	}
-	baker := bistro.CreateBaker(c.dpkg, c.ldd)
+	baker := bistro.NewBaker(c.dpkg, c.ldd)
 	visitedPackages := make(map[string]struct{})
 	var backedPackages []*bistro.Package
 	var files []string
