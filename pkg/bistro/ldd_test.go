@@ -1,6 +1,7 @@
 package bistro
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,49 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLddListObjects(t *testing.T) {
+	failure := errors.New("ldd failed")
+	for _, tt := range []struct {
+		name    string
+		output  string
+		err     error
+		wantErr string
+	}{
+		{name: "resolved", output: "libfoo.so => /lib/libfoo.so (0x1234)\n"},
+		{name: "empty"},
+		{name: "command error", err: failure, wantErr: failure.Error()},
+		{name: "invalid output", output: "unexpected", wantErr: "unexpected line"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			l := NewLdd(dpkgTestExecer(func(name string, args ...string) ([]byte, error) {
+				assert.Equal(t, "ldd", name)
+				assert.Equal(t, []string{"/app/program"}, args)
+				return []byte(tt.output), tt.err
+			}))
+			info, err := l.ListObjects("/app/program")
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				assert.Nil(t, info)
+				if tt.err != nil {
+					assert.ErrorIs(t, err, failure)
+				}
+				return
+			}
+			require.NoError(t, err)
+			if tt.output == "" {
+				assert.Equal(t, &LinkInfo{}, info)
+			} else {
+				assert.Equal(t, []*Library{{Name: "libfoo.so", Path: "/lib/libfoo.so"}}, info.Libs)
+			}
+		})
+	}
+}
+
+func TestLibraryIsBroken(t *testing.T) {
+	assert.True(t, (&Library{Name: "missing.so"}).IsBroken())
+	assert.False(t, (&Library{Name: "present.so", Path: "/lib/present.so"}).IsBroken())
+}
 
 func TestParseLddResult(t *testing.T) {
 	for _, tt := range []struct {

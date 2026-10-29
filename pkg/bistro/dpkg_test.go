@@ -159,6 +159,15 @@ func TestDpkgEmptyOutput(t *testing.T) {
 	assert.Empty(t, owners)
 }
 
+func TestDpkgListPackagesSkipsIncompleteRows(t *testing.T) {
+	d := NewDpkg(dpkgTestExecer(func(string, ...string) ([]byte, error) {
+		return []byte("missing-fields\nname\tversion\tarch\nvalid:arm64\t1.0\tarm64\tinstalled\n"), nil
+	}))
+	got, err := d.ListPackages()
+	require.NoError(t, err)
+	assert.Equal(t, []*Package{{Package: "valid:arm64", Version: "1.0", Architecture: "arm64", Status: "installed"}}, got)
+}
+
 func TestDiffPackages(t *testing.T) {
 	old := &Package{Package: "libc6:amd64", Version: "1", Architecture: "amd64", Status: "installed"}
 	updated := &Package{Package: "libc6:amd64", Version: "2", Architecture: "amd64", Status: "installed"}
