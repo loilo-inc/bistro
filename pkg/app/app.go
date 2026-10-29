@@ -51,6 +51,10 @@ func (c *app) command() *cli.Command {
 						Name:  "package",
 						Usage: "Packages to include in the root filesystem",
 					},
+					&cli.StringSliceFlag{
+						Name:  "copy",
+						Usage: "Files or directories to copy into the root filesystem",
+					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return c.Bundle(bistro.BundleInput{
@@ -58,6 +62,7 @@ func (c *app) command() *cli.Command {
 						Files:    cmd.Args().Slice(),
 						Scans:    cmd.StringSlice("scan"),
 						Packages: cmd.StringSlice("package"),
+						Copies:   cmd.StringSlice("copy"),
 					})
 				},
 			},

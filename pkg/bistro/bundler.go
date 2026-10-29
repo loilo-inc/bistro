@@ -2,6 +2,8 @@ package bistro
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -10,6 +12,7 @@ type BundleInput struct {
 	Files    []string
 	Scans    []string
 	Packages []string
+	Copies   []string
 }
 
 type Bundler interface {
@@ -78,6 +81,14 @@ func (b *bundler) Bundle(input BundleInput) error {
 		}
 	}
 
+	for _, copy := range input.Copies {
+		if abs, err := filepath.Abs(copy); err != nil {
+			return err
+		} else if err := b.addCopyFile(abs); err != nil {
+			return err
+		}
+	}
+
 	if len(b.brokenDeps) > 0 {
 		dep := b.brokenDeps[0]
 		return fmt.Errorf("some libraries are not linked: %s => %v", dep.ElfFile.Path, dep.BrokenLibs)
@@ -93,6 +104,33 @@ func (b *bundler) Bundle(input BundleInput) error {
 		DpkgList: b.packages,
 		Files:    b.files,
 	})
+}
+
+func (b *bundler) addCopyFile(file string) error {
+	if !filepath.IsAbs(file) {
+		return fmt.Errorf("path must be absolute: %s", file)
+	}
+	lstat, err := os.Lstat(file)
+	if err != nil {
+		return err
+	}
+
+	b.files = append(b.files, file)
+
+	if !lstat.IsDir() {
+		return nil
+	}
+	entries, err := os.ReadDir(file)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		err := b.addCopyFile(filepath.Join(file, entry.Name()))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b *bundler) addDependency(deps ...*ElfDependency) {

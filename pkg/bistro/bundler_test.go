@@ -1,6 +1,7 @@
 package bistro
 
 import (
+	"archive/tar"
 	"debug/elf"
 	"errors"
 	"os"
@@ -197,4 +198,127 @@ func TestBundlerReuseRefreshesScanner(t *testing.T) {
 	entries := readBundleTar(t, out)
 	assert.Contains(t, entries, rootFSArchiveName(other))
 	assert.NotContains(t, entries, rootFSArchiveName(file))
+}
+
+func TestBundlerCopyDirectory(t *testing.T) {
+	for _, relative := range []bool{false, true} {
+		name := "absolute"
+		if relative {
+			name = "relative"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := rootFSTempDir(t)
+			t.Chdir(dir)
+			tree := filepath.Join(dir, "tree")
+			file := filepath.Join(tree, "nested", "config")
+			empty := filepath.Join(tree, "empty")
+			writeRootFSFile(t, file, "configuration", 0640)
+			require.NoError(t, os.Mkdir(empty, 0750))
+			require.NoError(t, os.Chmod(empty, 0750))
+			source := tree
+			if relative {
+				source = "tree"
+			}
+			out := filepath.Join(dir, "bundle.tar")
+			require.NoError(t, NewBundler(nil, nil).Bundle(BundleInput{Out: out, Copies: []string{source}}))
+			entries := readBundleTar(t, out)
+			for _, path := range []string{tree, filepath.Dir(file), empty} {
+				require.Contains(t, entries, rootFSArchiveName(path))
+				assert.Equal(t, byte(tar.TypeDir), entries[rootFSArchiveName(path)].header.Typeflag)
+			}
+			assert.Equal(t, int64(0750), entries[rootFSArchiveName(empty)].header.Mode)
+			require.Contains(t, entries, rootFSArchiveName(file))
+			assert.Equal(t, "configuration", entries[rootFSArchiveName(file)].body)
+			assert.Equal(t, int64(0640), entries[rootFSArchiveName(file)].header.Mode)
+		})
+	}
+}
+
+func TestBundlerCopySymlinks(t *testing.T) {
+	dir := rootFSTempDir(t)
+	tree := filepath.Join(dir, "tree")
+	file := filepath.Join(dir, "outside", "file")
+	empty := filepath.Join(dir, "outside", "empty")
+	writeRootFSFile(t, file, "target content", 0644)
+	require.NoError(t, os.Mkdir(empty, 0755))
+	require.NoError(t, os.Mkdir(tree, 0755))
+	links := map[string]string{
+		"relative":  "../outside/file",
+		"absolute":  file,
+		"directory": "../outside/empty",
+		"self":      ".",
+	}
+	for name, target := range links {
+		require.NoError(t, os.Symlink(target, filepath.Join(tree, name)))
+	}
+	out := filepath.Join(dir, "bundle.tar")
+	require.NoError(t, NewBundler(nil, nil).Bundle(BundleInput{Out: out, Copies: []string{tree}}))
+	entries := readBundleTar(t, out)
+	for name, target := range links {
+		key := rootFSArchiveName(filepath.Join(tree, name))
+		require.Contains(t, entries, key)
+		assert.Equal(t, byte(tar.TypeSymlink), entries[key].header.Typeflag)
+		assert.Equal(t, target, entries[key].header.Linkname)
+	}
+	// RootFS preserves each link and also copies its target, even outside the
+	// explicitly copied tree. A self directory link must not be traversed.
+	assert.Equal(t, "target content", entries[rootFSArchiveName(file)].body)
+	require.Contains(t, entries, rootFSArchiveName(empty))
+	assert.Equal(t, byte(tar.TypeDir), entries[rootFSArchiveName(empty)].header.Typeflag)
+}
+
+func TestBundlerCopyMergesAndDeduplicates(t *testing.T) {
+	dir := rootFSTempDir(t)
+	t.Chdir(dir)
+	file := filepath.Join(dir, "tree", "program")
+	copiedELF := filepath.Join(dir, "tree", "dynamic.so")
+	writeTestELF(t, file, elf.ET_EXEC, false)
+	writeTestELF(t, copiedELF, elf.ET_DYN, false, "not-installed.so")
+	pkg := &Package{Package: "example:arm64", Status: PackageStatusInstalled}
+	d := packageFilesStub(t, []*Package{pkg}, map[string][]string{pkg.Package: {file}})
+	out := filepath.Join(dir, "bundle.tar")
+	// A nil Ldd makes an unexpected dependency scan of a copied ELF fail.
+	require.NoError(t, NewBundler(d, nil).Bundle(BundleInput{
+		Out: out, Files: []string{file}, Scans: []string{file}, Packages: []string{pkg.Package},
+		Copies: []string{"tree", "tree/program", "tree", copiedELF},
+	}))
+	entries := readBundleTar(t, out) // Also rejects duplicate tar entries.
+	for _, path := range []string{file, copiedELF} {
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.Contains(t, entries, rootFSArchiveName(path))
+		assert.Equal(t, string(data), entries[rootFSArchiveName(path)].body)
+	}
+	assert.Contains(t, entries, "var/lib/dpkg/status.d/example:arm64")
+}
+
+func TestBundlerCopyFailureAndReuse(t *testing.T) {
+	for _, stage := range []string{"missing path", "dangling link"} {
+		t.Run(stage, func(t *testing.T) {
+			dir := rootFSTempDir(t)
+			good := filepath.Join(dir, "good")
+			bad := filepath.Join(dir, "missing")
+			out := filepath.Join(dir, "bundle.tar")
+			writeRootFSFile(t, good, "good content", 0644)
+			writeRootFSFile(t, out, "previous archive", 0644)
+			if stage == "dangling link" {
+				bad = filepath.Join(dir, "tree", "broken")
+				require.NoError(t, os.Mkdir(filepath.Dir(bad), 0755))
+				require.NoError(t, os.Symlink("missing", bad))
+				bad = filepath.Dir(bad)
+			}
+			b := NewBundler(nil, nil)
+			err := b.Bundle(BundleInput{Out: out, Copies: []string{good, bad}})
+			require.ErrorIs(t, err, os.ErrNotExist)
+			original, err := os.ReadFile(out)
+			require.NoError(t, err)
+			assert.Equal(t, "previous archive", string(original))
+			other := filepath.Join(dir, "other")
+			writeRootFSFile(t, other, "other content", 0644)
+			require.NoError(t, b.Bundle(BundleInput{Out: out, Copies: []string{other}}))
+			entries := readBundleTar(t, out)
+			assert.Equal(t, "other content", entries[rootFSArchiveName(other)].body)
+			assert.NotContains(t, entries, rootFSArchiveName(good), "failed copy must not leak into the next bundle")
+		})
+	}
 }
