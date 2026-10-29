@@ -108,7 +108,7 @@ func (f *finder) getPackage(packageName string) (*Package, error) {
 	if cache, ok := f.pkgCache[packageName]; ok {
 		return cache, nil
 	}
-	pkgs, err := f.dpkg.ListPackages([]string{packageName})
+	pkgs, err := f.dpkg.ListPackages(packageName)
 	if err != nil {
 		return nil, err
 	}

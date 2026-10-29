@@ -3,7 +3,7 @@ package bistro
 import "strings"
 
 type Dpkg interface {
-	ListPackages(packages ...[]string) ([]*Package, error)
+	ListPackages(packages ...string) ([]*Package, error)
 	ListFiles(pkgName string) ([]string, error)
 	Search(pattern string) ([]*OwnedFile, error)
 	PackageStatus(pkgName string) ([]byte, error)
@@ -34,11 +34,9 @@ type OwnedFile struct {
 	File    string
 }
 
-func (b *dpkg) ListPackages(packages ...[]string) (dpkgList []*Package, err error) {
+func (b *dpkg) ListPackages(packages ...string) (dpkgList []*Package, err error) {
 	args := []string{"-W", "-f=${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n"}
-	for _, pkgGroup := range packages {
-		args = append(args, pkgGroup...)
-	}
+	args = append(args, packages...)
 	out, err := b.execer.Output("dpkg-query", args...)
 	if err != nil {
 		return nil, err

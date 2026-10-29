@@ -26,11 +26,11 @@ func (f dpkgTestExecer) Output(name string, args ...string) ([]byte, error) {
 func TestDpkgListPackages(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
-		groups [][]string
+		groups []string
 		args   []string
 	}{
 		{name: "all packages"},
-		{name: "selected packages", groups: [][]string{{"libc6:amd64", "libc6:i386"}, {}, {"example"}}, args: []string{"libc6:amd64", "libc6:i386", "example"}},
+		{name: "selected packages", groups: []string{"libc6:amd64", "libc6:i386", "example"}, args: []string{"libc6:amd64", "libc6:i386", "example"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			calls := 0

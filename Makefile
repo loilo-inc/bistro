@@ -1,4 +1,4 @@
-.PHONY: build debug bistro
+.PHONY: build debug main
 build:
 	docker build -t bistro .
 debug:

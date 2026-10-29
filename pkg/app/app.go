@@ -19,14 +19,6 @@ func CreateCLI() {
 }
 
 func (c *app) command() *cli.Command {
-	outRootfs := func() cli.Flag {
-		return &cli.StringFlag{
-			Name:     "out",
-			Aliases:  []string{"o"},
-			Usage:    "Output root filesystem tar archive",
-			Required: true,
-		}
-	}
 	return &cli.Command{
 		Name:  "bistro",
 		Usage: "Build a distroless root filesystem",
@@ -43,13 +35,30 @@ func (c *app) command() *cli.Command {
 			},
 			{
 				Name:      "bundle",
-				ArgsUsage: "EXECUTABLE",
-				Flags:     []cli.Flag{outRootfs()},
+				ArgsUsage: "BUNDLE [executable...]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "out",
+						Aliases:  []string{"o"},
+						Usage:    "Output root filesystem tar archive",
+						Required: true,
+					},
+					&cli.StringSliceFlag{
+						Name:  "scan",
+						Usage: "Executable or directories to scan for dependencies",
+					},
+					&cli.StringSliceFlag{
+						Name:  "package",
+						Usage: "Packages to include in the root filesystem",
+					},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.Args().Len() != 1 {
-						return fmt.Errorf("bundle requires exactly one executable")
-					}
-					return c.Bundle(cmd.String("out"), cmd.Args().First())
+					return c.Bundle(bistro.BundleInput{
+						Out:      cmd.String("out"),
+						Files:    cmd.Args().Slice(),
+						Scans:    cmd.StringSlice("scan"),
+						Packages: cmd.StringSlice("package"),
+					})
 				},
 			},
 		},
@@ -93,34 +102,7 @@ func (c *app) Scan(paths ...string) error {
 	return nil
 }
 
-func (c *app) Bundle(outfile string, file string) error {
-	scanner := bistro.NewScanner(c.ldd, c.dpkg)
-	deps, err := scanner.Scan(file)
-	if err != nil {
-		return err
-	}
-	baker := bistro.NewBaker(c.dpkg, c.ldd)
-	visitedPackages := make(map[string]struct{})
-	var backedPackages []*bistro.Package
-	var files []string
-	for _, dep := range deps {
-		if len(dep.BrokenLibs) > 0 {
-			return fmt.Errorf("some libraries are not linked: %s => %v", dep.ElfFile.Path, dep.BrokenLibs)
-		}
-		for _, exeDep := range dep.Dependencies {
-			if exeDep.Package.Status != bistro.PackageStatusInstalled {
-				return fmt.Errorf("depended package is not installed: %s", exeDep.Package.Package)
-			}
-			if _, ok := visitedPackages[exeDep.Package.Package]; !ok {
-				visitedPackages[exeDep.Package.Package] = struct{}{}
-				backedPackages = append(backedPackages, exeDep.Package)
-			}
-		}
-		files = append(files, dep.ElfFile.Path)
-	}
-	return baker.CreateRootFS(&bistro.BakeInput{
-		Out:      outfile,
-		DpkgList: backedPackages,
-		Files:    files,
-	})
+func (c *app) Bundle(input bistro.BundleInput) error {
+	bundler := bistro.NewBundler(c.dpkg, c.ldd)
+	return bundler.Bundle(input)
 }
