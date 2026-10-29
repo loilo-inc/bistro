@@ -1,6 +1,4 @@
-.PHONY: build debug main
-build:
-	docker build -t bistro .
+.PHONY: debug main
 debug:
 	docker run --rm -it \
 		-w /bistro \
