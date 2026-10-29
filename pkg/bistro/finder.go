@@ -7,7 +7,7 @@ import (
 )
 
 type Finder interface {
-	TraceDepsForExecutable(file string) ([]*ExeDependency, error)
+	TraceDepsForExecutable(file string) (*ExeTraceResult, error)
 }
 
 type finder struct {
@@ -24,9 +24,14 @@ func CreateFinder(dpkg Dpkg, ldd Ldd) Finder {
 	return &finder{dpkg: dpkg, ldd: ldd}
 }
 
+type ExeTraceResult struct {
+	Dependencies []*ExeDependency
+	BrokenLibs   []string
+}
+
 var _ Finder = &finder{}
 
-func (b *finder) TraceDepsForExecutable(file string) ([]*ExeDependency, error) {
+func (b *finder) TraceDepsForExecutable(file string) (*ExeTraceResult, error) {
 	if !filepath.IsAbs(file) {
 		return nil, errors.New("file path is not absolute: " + file)
 	}
@@ -34,22 +39,23 @@ func (b *finder) TraceDepsForExecutable(file string) ([]*ExeDependency, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(info.BrokenLibs) > 0 {
-		return nil, errors.New("broken libraries found")
-	}
 
-	var deps []*ExeDependency
+	var result ExeTraceResult
 	for _, lib := range info.Libs {
+		if lib.IsBroken() {
+			result.BrokenLibs = append(result.BrokenLibs, lib.Name)
+			continue
+		}
 		pkg, err := b.CollectPackage(lib.Path)
 		if err != nil {
 			return nil, err
 		}
-		deps = append(deps, &ExeDependency{
+		result.Dependencies = append(result.Dependencies, &ExeDependency{
 			Library: lib,
 			Package: pkg,
 		})
 	}
-	return deps, nil
+	return &result, nil
 }
 
 func (b *finder) CollectPackage(libfile string) (*Package, error) {

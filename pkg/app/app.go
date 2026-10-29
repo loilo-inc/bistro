@@ -101,13 +101,13 @@ func (c *app) Bundle(outfile string, file string) error {
 		return err
 	}
 	baker := bistro.CreateBaker(c.dpkg, c.ldd)
-	visitedPackages := make(map[*bistro.Package]struct{})
+	visitedPackages := make(map[string]struct{})
 	var backedPackages []*bistro.Package
 	var files []string
 	for _, dep := range deps {
 		for _, exeDep := range dep.Dependencies {
-			if _, ok := visitedPackages[exeDep.Package]; !ok {
-				visitedPackages[exeDep.Package] = struct{}{}
+			if _, ok := visitedPackages[exeDep.Package.Package]; !ok {
+				visitedPackages[exeDep.Package.Package] = struct{}{}
 				backedPackages = append(backedPackages, exeDep.Package)
 			}
 		}

@@ -28,15 +28,18 @@ func (l *ldd) ListObjects(file string) (*LinkInfo, error) {
 const LddNotFound = "not found"
 
 type LinkInfo struct {
-	Ld         string
-	Vdso       string
-	Libs       []*Library
-	BrokenLibs []string
+	Ld   string
+	Vdso string
+	Libs []*Library
 }
 
 type Library struct {
 	Name string
 	Path string
+}
+
+func (l *Library) IsBroken() bool {
+	return l.Path == ""
 }
 
 func parseLddResult(data []byte) (*LinkInfo, error) {
@@ -67,7 +70,10 @@ func parseLddResult(data []byte) (*LinkInfo, error) {
 		lib := strings.TrimSpace(parts[0])
 		target := strings.TrimSpace(parts[1])
 		if target == LddNotFound {
-			info.BrokenLibs = append(info.BrokenLibs, lib)
+			info.Libs = append(info.Libs, &Library{
+				Name: lib,
+				Path: "",
+			})
 		} else {
 			path, _, _ := strings.Cut(target, " ")
 			info.Libs = append(info.Libs, &Library{

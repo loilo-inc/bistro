@@ -51,8 +51,11 @@ func TestParseLddResult(t *testing.T) {
 			name:    "missing libraries alongside resolved library",
 			fixture: "missing_libraries.txt",
 			want: &LinkInfo{
-				Libs:       []*Library{{Name: "libc.so.6", Path: "/lib/x86_64-linux-gnu/libc.so.6"}},
-				BrokenLibs: []string{"libmissing.so.1", "libother.so.2"},
+				Libs: []*Library{
+					{Name: "libc.so.6", Path: "/lib/x86_64-linux-gnu/libc.so.6"},
+					{Name: "libmissing.so.1", Path: ""},
+					{Name: "libother.so.2", Path: ""},
+				},
 			},
 		},
 		{
