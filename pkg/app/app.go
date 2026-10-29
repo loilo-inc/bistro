@@ -3,25 +3,43 @@ package app
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/loilo-inc/bistro/pkg/bistro"
 	"github.com/urfave/cli/v3"
 )
 
-func CreateCLI() {
-	app := NewCli()
-	err := app.command().Run(context.Background(), os.Args)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+type App interface {
+	Run(ctx context.Context, args []string) error
+}
+
+type app struct {
+	dpkg    bistro.Dpkg
+	ldd     bistro.Ldd
+	version string
+	commit  string
+	date    string
+}
+
+var _ App = (*app)(nil)
+
+func New(version, commit, date string) App {
+	execer := bistro.NewExecer()
+	ldd := bistro.NewLdd(execer)
+	dpkg := bistro.NewDpkg(execer)
+	return &app{
+		dpkg:    dpkg,
+		ldd:     ldd,
+		version: version,
+		commit:  commit,
+		date:    date,
 	}
 }
 
 func (c *app) command() *cli.Command {
 	return &cli.Command{
-		Name:  "bistro",
-		Usage: "Build a distroless root filesystem",
+		Name:    "bistro",
+		Usage:   "Build a distroless root filesystem",
+		Version: fmt.Sprintf("%s (commit: %s, date: %s)", c.version, c.commit, c.date),
 		Commands: []*cli.Command{
 			{
 				Name:      "scan",
@@ -30,7 +48,7 @@ func (c *app) command() *cli.Command {
 					if cmd.Args().Len() == 0 {
 						return fmt.Errorf("scan requires at least one file or directory")
 					}
-					return c.Scan(cmd.Args().Slice()...)
+					return c.scan(cmd.Args().Slice()...)
 				},
 			},
 			{
@@ -57,7 +75,7 @@ func (c *app) command() *cli.Command {
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return c.Bundle(bistro.BundleInput{
+					return c.bundle(bistro.BundleInput{
 						Out:      cmd.String("out"),
 						Files:    cmd.Args().Slice(),
 						Scans:    cmd.StringSlice("scan"),
@@ -70,22 +88,11 @@ func (c *app) command() *cli.Command {
 	}
 }
 
-type app struct {
-	dpkg bistro.Dpkg
-	ldd  bistro.Ldd
+func (c *app) Run(ctx context.Context, args []string) error {
+	return c.command().Run(ctx, args)
 }
 
-func NewCli() *app {
-	execer := bistro.NewExecer()
-	ldd := bistro.NewLdd(execer)
-	dpkg := bistro.NewDpkg(execer)
-	return &app{
-		dpkg: dpkg,
-		ldd:  ldd,
-	}
-}
-
-func (c *app) Scan(paths ...string) error {
+func (c *app) scan(paths ...string) error {
 	scanner := bistro.NewScanner(c.ldd, c.dpkg)
 	var elfDeps []*bistro.ElfDependency
 	for _, path := range paths {
@@ -107,7 +114,7 @@ func (c *app) Scan(paths ...string) error {
 	return nil
 }
 
-func (c *app) Bundle(input bistro.BundleInput) error {
+func (c *app) bundle(input bistro.BundleInput) error {
 	bundler := bistro.NewBundler(c.dpkg, c.ldd)
 	return bundler.Bundle(input)
 }

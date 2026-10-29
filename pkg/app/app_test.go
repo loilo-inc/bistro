@@ -23,7 +23,7 @@ func TestBundleCopyFlags(t *testing.T) {
 	out := filepath.Join(dir, "bundle.tar")
 	// Exercise flag parsing and propagation to BundleInput without positional
 	// ELF arguments or any dependency on host ldd/dpkg commands.
-	err = NewCli().command().Run(context.Background(), []string{
+	err = New("v", "c", "d").Run(context.Background(), []string{
 		"bistro", "bundle", "-o", out, "--copy", "first", "--copy", "second",
 	})
 	require.NoError(t, err)

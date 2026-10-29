@@ -1,0 +1,19 @@
+version: 2
+builds:
+  - binary: bistro
+    main: ./main.go
+    goos:
+      - linux
+    env:
+      - CGO_ENABLED=0
+    goarch:
+      - amd64
+      - arm64
+archives:
+  - formats: ['zip']
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+release:
+  github:
+    owner: loilo-inc
+    name: bistro
+  prerelease: auto

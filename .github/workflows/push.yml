@@ -1,0 +1,33 @@
+name: CI
+permissions:
+  contents: read
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - "**"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: "go.mod"
+      - name: Check mod
+        run: |
+          go mod tidy
+          git diff --exit-code
+      - run: go build
+      - run: make main
+      - run: go test ./... -coverprofile=coverage.txt -covermode=count
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        # skip if pr from dependabot, as it doesn't have access to secrets
+        if: github.actor != 'dependabot[bot]'
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          fail_ci_if_error: true
+          files: coverage.txt
