@@ -2,10 +2,8 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/loilo-inc/bistro/pkg/bistro"
 	"github.com/urfave/cli/v3"
@@ -34,50 +32,17 @@ func (c *app) command() *cli.Command {
 		Usage: "Build a distroless root filesystem",
 		Commands: []*cli.Command{
 			{
-				Name:  "save",
-				Usage: "Save the list of installed Debian packages",
-				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:     "out",
-						Aliases:  []string{"o"},
-						Usage:    "Output file for the list of installed Debian packages",
-						Required: true,
-					},
-				},
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return c.Save(cmd.String("out"))
-				},
-			},
-			{
-				Name:  "patch",
-				Usage: "Create a root filesystem tar archive from added or updated packages",
-				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:     "before",
-						Usage:    "Input file containing the list of installed Debian packages",
-						Required: true,
-					},
-					outRootfs(),
-				},
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return c.Patch(cmd.String("before"), cmd.String("out"))
-				},
-			},
-			{
-				Name:      "collect",
-				Usage:     "Collect files and metadata for installed packages",
-				ArgsUsage: "PACKAGE [PACKAGE...]",
-				Flags:     []cli.Flag{outRootfs()},
+				Name:      "scan",
+				ArgsUsage: "SCAN [fileorDirs...]",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() == 0 {
-						return fmt.Errorf("collect requires at least one package")
+						return fmt.Errorf("scan requires at least one file or directory")
 					}
-					return c.Collect(cmd.String("out"), cmd.Args().Slice())
+					return c.Scan(cmd.Args().Slice()...)
 				},
 			},
 			{
 				Name:      "bundle",
-				Usage:     "Collect packages owning an executable's shared libraries",
 				ArgsUsage: "EXECUTABLE",
 				Flags:     []cli.Flag{outRootfs()},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -110,89 +75,47 @@ type PackageList struct {
 	Packages []*bistro.Package `json:"packages"`
 }
 
-func (c *app) Save(outFile string) error {
-	list, err := c.listInstalledPackages()
-	if err != nil {
-		return err
+func (c *app) Scan(paths ...string) error {
+	scanner := bistro.CreateScanner(c.ldd, c.dpkg)
+	var elfDeps []*bistro.ElfDependency
+	for _, path := range paths {
+		deps, err := scanner.Scan(path)
+		if err != nil {
+			return err
+		}
+		elfDeps = append(elfDeps, deps...)
 	}
-	if err := os.MkdirAll(filepath.Dir(outFile), 0755); err != nil {
-		return err
-	}
-	jsonData, err := json.Marshal(&PackageList{Packages: list})
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(outFile, jsonData, 0644)
-}
-
-func (c *app) Patch(inFile string, outfile string) error {
-	jsonData, err := os.ReadFile(inFile)
-	if err != nil {
-		return err
-	}
-	var pkgList PackageList
-	if err := json.Unmarshal(jsonData, &pkgList); err != nil {
-		return err
-	}
-	baker := bistro.CreateBaker(c.dpkg, c.ldd)
-	after, err := c.listInstalledPackages()
-	if err != nil {
-		return err
-	}
-	diff, err := bistro.DiffPackages(pkgList.Packages, after)
-	if err != nil {
-		return err
-	}
-	var copyList []*bistro.Package
-	copyList = append(copyList, diff.Added...)
-	copyList = append(copyList, diff.Changed...)
-	return baker.CreateRootFS(&bistro.BakeInput{
-		Out:      outfile,
-		DpkgList: copyList,
-	})
-}
-
-func (c *app) listInstalledPackages() ([]*bistro.Package, error) {
-	allList, err := c.dpkg.ListPackages()
-	if err != nil {
-		return nil, err
-	}
-	var installed []*bistro.Package
-	for _, pkg := range allList {
-		if pkg.Status == "installed" {
-			installed = append(installed, pkg)
+	for _, elfDep := range elfDeps {
+		fmt.Printf("%s\n", elfDep.ElfFile.Path)
+		for _, exeDep := range elfDep.Dependencies {
+			fmt.Printf("  %s => %s\n", exeDep.Library.Path, exeDep.Package.Package)
 		}
 	}
-	return installed, nil
-}
-
-func (c *app) Collect(outfile string, packages ...[]string) error {
-	list, err := c.dpkg.ListPackages(packages...)
-	if err != nil {
-		return err
-	}
-	for _, pkg := range list {
-		if pkg.Status != "installed" {
-			return fmt.Errorf("'%s' is not installed", pkg.Package)
-		}
-	}
-	baker := bistro.CreateBaker(c.dpkg, c.ldd)
-	return baker.CreateRootFS(&bistro.BakeInput{
-		Out:      outfile,
-		DpkgList: list,
-	})
+	return nil
 }
 
 func (c *app) Bundle(outfile string, file string) error {
-	finder := bistro.CreateFinder(c.dpkg, c.ldd)
-	backedPackages, err := finder.PackagesForExecutable(file)
+	scanner := bistro.CreateScanner(c.ldd, c.dpkg)
+	deps, err := scanner.Scan(file)
 	if err != nil {
 		return err
 	}
 	baker := bistro.CreateBaker(c.dpkg, c.ldd)
+	visitedPackages := make(map[*bistro.Package]struct{})
+	var backedPackages []*bistro.Package
+	var files []string
+	for _, dep := range deps {
+		for _, exeDep := range dep.Dependencies {
+			if _, ok := visitedPackages[exeDep.Package]; !ok {
+				visitedPackages[exeDep.Package] = struct{}{}
+				backedPackages = append(backedPackages, exeDep.Package)
+			}
+		}
+		files = append(files, dep.ElfFile.Path)
+	}
 	return baker.CreateRootFS(&bistro.BakeInput{
 		Out:      outfile,
 		DpkgList: backedPackages,
-		Files:    []string{file},
+		Files:    files,
 	})
 }

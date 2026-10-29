@@ -30,13 +30,13 @@ const LddNotFound = "not found"
 type LinkInfo struct {
 	Ld         string
 	Vdso       string
-	Libs       []Library
+	Libs       []*Library
 	BrokenLibs []string
 }
 
 type Library struct {
-	Library string
-	Path    string
+	Name string
+	Path string
 }
 
 func parseLddResult(data []byte) (*LinkInfo, error) {
@@ -70,9 +70,9 @@ func parseLddResult(data []byte) (*LinkInfo, error) {
 			info.BrokenLibs = append(info.BrokenLibs, lib)
 		} else {
 			path, _, _ := strings.Cut(target, " ")
-			info.Libs = append(info.Libs, Library{
-				Library: lib,
-				Path:    path,
+			info.Libs = append(info.Libs, &Library{
+				Name: lib,
+				Path: path,
 			})
 		}
 	}

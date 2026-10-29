@@ -32,9 +32,9 @@ func TestParseLddResult(t *testing.T) {
 			want: &LinkInfo{
 				Vdso: "linux-vdso.so.1 (0x00007ffd12340000)",
 				Ld:   "/lib64/ld-linux-x86-64.so.2 (0x00007f5678000000)",
-				Libs: []Library{
-					{Library: "libfoo.so.1", Path: "/lib/x86_64-linux-gnu/libfoo.so.1"},
-					{Library: "libc.so.6", Path: "/lib/x86_64-linux-gnu/libc.so.6"},
+				Libs: []*Library{
+					{Name: "libfoo.so.1", Path: "/lib/x86_64-linux-gnu/libfoo.so.1"},
+					{Name: "libc.so.6", Path: "/lib/x86_64-linux-gnu/libc.so.6"},
 				},
 			},
 		},
@@ -44,14 +44,14 @@ func TestParseLddResult(t *testing.T) {
 			want: &LinkInfo{
 				Vdso: "linux-vdso.so.1 (0x0000ffffabcd0000)",
 				Ld:   "/lib/ld-linux-aarch64.so.1 (0x0000ffffac000000)",
-				Libs: []Library{{Library: "libc.so.6", Path: "/lib/aarch64-linux-gnu/libc.so.6"}},
+				Libs: []*Library{{Name: "libc.so.6", Path: "/lib/aarch64-linux-gnu/libc.so.6"}},
 			},
 		},
 		{
 			name:    "missing libraries alongside resolved library",
 			fixture: "missing_libraries.txt",
 			want: &LinkInfo{
-				Libs:       []Library{{Library: "libc.so.6", Path: "/lib/x86_64-linux-gnu/libc.so.6"}},
+				Libs:       []*Library{{Name: "libc.so.6", Path: "/lib/x86_64-linux-gnu/libc.so.6"}},
 				BrokenLibs: []string{"libmissing.so.1", "libother.so.2"},
 			},
 		},
