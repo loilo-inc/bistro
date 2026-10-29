@@ -27,6 +27,8 @@ type Package struct {
 	Status       string `json:"status"`
 }
 
+const PackageStatusInstalled = "installed"
+
 type OwnedFile struct {
 	Package string
 	File    string

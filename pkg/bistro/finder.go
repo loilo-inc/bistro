@@ -11,8 +11,11 @@ type Finder interface {
 }
 
 type finder struct {
-	dpkg Dpkg
-	ldd  Ldd
+	dpkg        Dpkg
+	ldd         Ldd
+	lddCache    map[string]*LinkInfo
+	pkgCache    map[string]*Package
+	searchCache map[string]*Package
 }
 
 type ExeDependency struct {
@@ -21,7 +24,11 @@ type ExeDependency struct {
 }
 
 func CreateFinder(dpkg Dpkg, ldd Ldd) Finder {
-	return &finder{dpkg: dpkg, ldd: ldd}
+	return &finder{dpkg: dpkg, ldd: ldd,
+		lddCache:    map[string]*LinkInfo{},
+		pkgCache:    map[string]*Package{},
+		searchCache: map[string]*Package{},
+	}
 }
 
 type ExeTraceResult struct {
@@ -35,7 +42,7 @@ func (b *finder) TraceDepsForExecutable(file string) (*ExeTraceResult, error) {
 	if !filepath.IsAbs(file) {
 		return nil, errors.New("file path is not absolute: " + file)
 	}
-	info, err := b.ldd.ListObjects(file)
+	info, err := b.listLibs(file)
 	if err != nil {
 		return nil, err
 	}
@@ -63,26 +70,53 @@ func (b *finder) CollectPackage(libfile string) (*Package, error) {
 	if err != nil {
 		return nil, err
 	}
-	result, err := b.dpkg.Search(realpath)
+	return b.searchPackage(realpath)
+}
+
+func (f *finder) listLibs(file string) (*LinkInfo, error) {
+	if cache, ok := f.lddCache[file]; ok {
+		return cache, nil
+	}
+	info, err := f.ldd.ListObjects(file)
+	if err != nil {
+		return nil, err
+	}
+	f.lddCache[file] = info
+	return info, nil
+}
+
+func (f *finder) searchPackage(file string) (*Package, error) {
+	if cache, ok := f.searchCache[file]; ok {
+		return cache, nil
+	}
+	result, err := f.dpkg.Search(file)
 	if err != nil {
 		return nil, err
 	}
 	if len(result) == 0 {
-		return nil, errors.New("library not found in any package: " + realpath)
+		return nil, errors.New("library not found in any package: " + file)
 	}
-	pkg, err := b.dpkg.ListPackages([]string{result[0].Package})
+	pkg, err := f.getPackage(result[0].Package)
 	if err != nil {
 		return nil, err
 	}
-	if len(pkg) == 0 {
-		return nil, errors.New("package not found: " + result[0].Package)
+	f.searchCache[file] = pkg
+	return pkg, nil
+}
+
+func (f *finder) getPackage(packageName string) (*Package, error) {
+	if cache, ok := f.pkgCache[packageName]; ok {
+		return cache, nil
 	}
-	for _, p := range pkg {
-		if p.Status != "installed" {
-			return nil, errors.New("package is not installed: " + p.Package)
-		}
+	pkgs, err := f.dpkg.ListPackages([]string{packageName})
+	if err != nil {
+		return nil, err
 	}
-	return pkg[0], nil
+	if len(pkgs) == 0 {
+		return nil, errors.New("package not found: " + packageName)
+	}
+	f.pkgCache[packageName] = pkgs[0]
+	return pkgs[0], nil
 }
 
 func realpath(file string) (string, error) {

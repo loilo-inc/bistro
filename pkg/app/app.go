@@ -90,6 +90,9 @@ func (c *app) Scan(paths ...string) error {
 		for _, exeDep := range elfDep.Dependencies {
 			fmt.Printf("  %s => %s\n", exeDep.Library.Path, exeDep.Package.Package)
 		}
+		for _, broken := range elfDep.BrokenLibs {
+			fmt.Printf("  [BROKEN] %s\n", broken)
+		}
 	}
 	return nil
 }
@@ -105,7 +108,13 @@ func (c *app) Bundle(outfile string, file string) error {
 	var backedPackages []*bistro.Package
 	var files []string
 	for _, dep := range deps {
+		if len(dep.BrokenLibs) > 0 {
+			return fmt.Errorf("some libraries are not linked: %s => %v", dep.ElfFile.Path, dep.BrokenLibs)
+		}
 		for _, exeDep := range dep.Dependencies {
+			if exeDep.Package.Status != bistro.PackageStatusInstalled {
+				return fmt.Errorf("depended package is not installed: %s", exeDep.Package.Package)
+			}
 			if _, ok := visitedPackages[exeDep.Package.Package]; !ok {
 				visitedPackages[exeDep.Package.Package] = struct{}{}
 				backedPackages = append(backedPackages, exeDep.Package)
