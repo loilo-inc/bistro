@@ -8,7 +8,7 @@ if [[ "$module" =~ /v([1-9]+)$ ]]; then
 fi
 
 tag="${GITHUB_REF_NAME}"
-if [[ "$tag" =~ ^v([1-9]+)\. ]]; then
+if [[ "$tag" =~ ^v([0-9]+)\. ]]; then
   tag_major="${BASH_REMATCH[1]}"
 else
   echo "::error ::Tag must start with v<major>., got: ${tag}"
