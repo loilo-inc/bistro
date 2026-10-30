@@ -53,8 +53,12 @@ func (b *finder) TraceDepsForExecutable(file string) (*ExeTraceResult, error) {
 			result.BrokenLibs = append(result.BrokenLibs, lib.Name)
 			continue
 		}
-		pkg, err := b.CollectPackage(lib.Path)
+		realpath, err := realpath(lib.Path)
 		if err != nil {
+			return nil, err
+		}
+		pkg, err := b.searchPackage(realpath)
+		if err != nil && err != errPackageNotFound {
 			return nil, err
 		}
 		result.Dependencies = append(result.Dependencies, &ExeDependency{
@@ -63,14 +67,6 @@ func (b *finder) TraceDepsForExecutable(file string) (*ExeTraceResult, error) {
 		})
 	}
 	return &result, nil
-}
-
-func (b *finder) CollectPackage(libfile string) (*Package, error) {
-	realpath, err := realpath(libfile)
-	if err != nil {
-		return nil, err
-	}
-	return b.searchPackage(realpath)
 }
 
 func (f *finder) listLibs(file string) (*LinkInfo, error) {
@@ -85,6 +81,8 @@ func (f *finder) listLibs(file string) (*LinkInfo, error) {
 	return info, nil
 }
 
+var errPackageNotFound = errors.New("package not found")
+
 func (f *finder) searchPackage(file string) (*Package, error) {
 	if cache, ok := f.searchCache[file]; ok {
 		return cache, nil
@@ -94,7 +92,7 @@ func (f *finder) searchPackage(file string) (*Package, error) {
 		return nil, err
 	}
 	if len(result) == 0 {
-		return nil, errors.New("library not found in any package: " + file)
+		return nil, errPackageNotFound
 	}
 	pkg, err := f.getPackage(result[0].Package)
 	if err != nil {

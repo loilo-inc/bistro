@@ -10,14 +10,13 @@ type Baker interface {
 }
 
 type baker struct {
-	dpkg Dpkg
-	ldd  Ldd
+	DI
 }
 
 var _ Baker = &baker{}
 
-func NewBaker(dpkg Dpkg, ldd Ldd) Baker {
-	return &baker{dpkg: dpkg, ldd: ldd}
+func NewBaker(di DI) Baker {
+	return &baker{DI: di}
 }
 
 type BakeInput struct {
@@ -65,27 +64,30 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 const DpkgStatusDir = "/var/lib/dpkg/status.d"
 
 func (b *baker) writePackageMetadata(rootFS RootFS, pkg *Package) error {
-	status, err := b.dpkg.PackageStatus(pkg.Package)
+	status, err := b.Dpkg.PackageStatus(pkg.Package)
 	if err != nil {
 		return err
 	}
 	if err = rootFS.Add(filepath.Join(DpkgStatusDir, pkg.Package), status, 0644); err != nil {
 		return err
 	}
-	md5sums, err := b.dpkg.PackageMd5Sums(pkg.Package)
+	md5sums, err := b.Dpkg.PackageMd5Sums(pkg.Package)
 	if err != nil {
 		return err
 	}
 	if err = rootFS.Add(filepath.Join(DpkgStatusDir, pkg.Package+".md5sums"), md5sums, 0644); err != nil {
 		return err
 	}
-	files, err := b.dpkg.ListFiles(pkg.Package)
+	files, err := b.Dpkg.ListFiles(pkg.Package)
 	if err != nil {
 		return err
 	}
 
 	for _, srcPath := range files {
-		if err := rootFS.Copy(srcPath); err != nil {
+		if err := rootFS.Copy(srcPath); os.IsNotExist(err) {
+			b.Logger.Error("File does not exist: %s", srcPath)
+			continue
+		} else if err != nil {
 			return err
 		}
 	}

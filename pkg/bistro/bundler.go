@@ -20,8 +20,7 @@ type Bundler interface {
 }
 
 type bundler struct {
-	dpkg            Dpkg
-	ldd             Ldd
+	DI
 	scanner         Scanner
 	packages        []*Package
 	files           []string
@@ -30,8 +29,8 @@ type bundler struct {
 	visitedPackages map[string]struct{}
 }
 
-func NewBundler(dpkg Dpkg, ldd Ldd) *bundler {
-	b := &bundler{dpkg: dpkg, ldd: ldd}
+func NewBundler(di DI) *bundler {
+	b := &bundler{DI: di}
 	b.reset()
 	return b
 }
@@ -41,12 +40,12 @@ func (b *bundler) reset() {
 	b.files = nil
 	b.missingPackages = nil
 	b.brokenDeps = nil
-	b.scanner = NewScanner(b.ldd, b.dpkg)
+	b.scanner = NewScanner(b.DI)
 	b.visitedPackages = make(map[string]struct{})
 }
 
 func (b *bundler) Bundle(input BundleInput) error {
-	baker := NewBaker(b.dpkg, b.ldd)
+	baker := NewBaker(b.DI)
 
 	defer b.reset()
 
@@ -72,7 +71,7 @@ func (b *bundler) Bundle(input BundleInput) error {
 	}
 
 	if len(input.Packages) > 0 {
-		pkgs, err := b.dpkg.ListPackages(input.Packages...)
+		pkgs, err := b.DI.Dpkg.ListPackages(input.Packages...)
 		if err != nil {
 			return err
 		}
@@ -139,7 +138,9 @@ func (b *bundler) addDependency(deps ...*ElfDependency) {
 			b.brokenDeps = append(b.brokenDeps, dep)
 		}
 		for _, exeDep := range dep.Dependencies {
-			b.addPackage(exeDep.Package)
+			if exeDep.Package != nil {
+				b.addPackage(exeDep.Package)
+			}
 		}
 	}
 }

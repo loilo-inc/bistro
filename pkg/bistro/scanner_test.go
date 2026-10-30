@@ -32,11 +32,11 @@ func TestScannerELFTypes(t *testing.T) {
 			path := filepath.Join(rootFSTempDir(t), "fixture")
 			writeTestELF(t, path, tt.typ, tt.interp, tt.libs...)
 			calls := 0
-			s := NewScanner(stubLdd(func(got string) (*LinkInfo, error) {
+			s := NewScanner(DI{Ldd: stubLdd(func(got string) (*LinkInfo, error) {
 				calls++
 				assert.Equal(t, path, got)
 				return &LinkInfo{Libs: []*Library{{Name: "missing"}}}, nil
-			}), nil)
+			})})
 			for range 2 {
 				deps, err := s.Scan(path)
 				require.NoError(t, err)
@@ -70,7 +70,7 @@ func TestScannerRecursiveAndRelativePaths(t *testing.T) {
 	writeTestELF(t, filepath.Join(dir, "nested", "object.o"), elf.ET_REL, false)
 	writeRootFSFile(t, filepath.Join(dir, "README"), "plain text", 0644)
 	writeRootFSFile(t, filepath.Join(dir, "empty"), "", 0644)
-	s := NewScanner(nil, nil)
+	s := NewScanner(DI{})
 	deps, err := s.Scan(dir)
 	require.NoError(t, err)
 	var got []string
@@ -98,7 +98,7 @@ func TestScannerSymlinks(t *testing.T) {
 	require.NoError(t, os.Symlink("nested/program", link))
 	dirlink := filepath.Join(dir, "directory")
 	require.NoError(t, os.Symlink("nested", dirlink))
-	s := NewScanner(nil, nil)
+	s := NewScanner(DI{})
 	deps, err := s.Scan(link)
 	require.NoError(t, err)
 	require.Len(t, deps, 1)
@@ -115,7 +115,7 @@ func TestScannerSymlinks(t *testing.T) {
 
 func TestScannerFailures(t *testing.T) {
 	dir := rootFSTempDir(t)
-	s := NewScanner(nil, nil).(*scanner)
+	s := NewScanner(DI{}).(*scanner)
 	missing := filepath.Join(dir, "missing")
 	_, err := s.Scan(missing)
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -159,7 +159,7 @@ func TestScannerDependencies(t *testing.T) {
 	path := filepath.Join(rootFSTempDir(t), "program")
 	writeTestELF(t, path, elf.ET_EXEC, true)
 	want := []*ExeDependency{{Library: &Library{Name: "libfoo.so", Path: "/lib/libfoo.so"}, Package: &Package{Package: "foo"}}}
-	s := NewScanner(nil, nil).(*scanner)
+	s := NewScanner(DI{}).(*scanner)
 	s.finder = stubFinder(func(got string) (*ExeTraceResult, error) {
 		assert.Equal(t, path, got)
 		return &ExeTraceResult{Dependencies: want}, nil
@@ -179,6 +179,6 @@ func TestScannerMalformedDynamicSection(t *testing.T) {
 	// A dynamic entry requires both a tag and value; a one-byte section is invalid.
 	binary.LittleEndian.PutUint64(data[int(sectionOffset)+128+32:], 1)
 	require.NoError(t, os.WriteFile(path, data, 0644))
-	_, err = NewScanner(nil, nil).Scan(path)
+	_, err = NewScanner(DI{}).Scan(path)
 	require.ErrorContains(t, err, "dynamic section")
 }

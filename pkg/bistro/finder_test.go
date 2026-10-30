@@ -67,7 +67,6 @@ func TestFinderFailures(t *testing.T) {
 		{name: "relative executable", path: "relative", want: "file path is not absolute"},
 		{name: "ldd failure", lddErr: failure, want: failure.Error()},
 		{name: "search failure", searchErr: failure, want: failure.Error()},
-		{name: "unowned library", want: "library not found in any package"},
 		{name: "query failure", owners: true, queryErr: failure, want: failure.Error()},
 		{name: "missing package", owners: true, want: "package not found"},
 	} {
@@ -135,21 +134,21 @@ func TestFinderRetriesFailedCommands(t *testing.T) {
 	}
 }
 
-func TestRealpath(t *testing.T) {
-	dir := rootFSTempDir(t)
-	file := filepath.Join(dir, "file")
-	writeRootFSFile(t, file, "content", 0644)
-	link := filepath.Join(dir, "link")
-	require.NoError(t, os.Symlink("file", link))
-	for _, path := range []string{file, link} {
-		got, err := realpath(path)
-		require.NoError(t, err)
-		assert.Equal(t, file, got)
-	}
-	for _, path := range []string{"relative", dir, filepath.Join(dir, "absent")} {
-		_, err := realpath(path)
-		require.Error(t, err)
-		_, err = NewFinder(nil, nil).(*finder).CollectPackage(path)
-		require.Error(t, err)
-	}
+func TestFinderUnownedLibrary(t *testing.T) {
+	lib := filepath.Join(rootFSTempDir(t), "library.so")
+	writeRootFSFile(t, lib, "library", 0644)
+	library := &Library{Name: "library.so", Path: lib}
+	d := stubDpkg{search: func(path string) ([]*OwnedFile, error) {
+		assert.Equal(t, lib, path)
+		return nil, nil
+	}}
+	f := NewFinder(d, stubLdd(func(string) (*LinkInfo, error) {
+		return &LinkInfo{Libs: []*Library{library}}, nil
+	}))
+	result, err := f.TraceDepsForExecutable("/bin/app")
+	require.NoError(t, err)
+	assert.Empty(t, result.BrokenLibs)
+	require.Len(t, result.Dependencies, 1)
+	assert.Same(t, library, result.Dependencies[0].Library)
+	assert.Nil(t, result.Dependencies[0].Package)
 }

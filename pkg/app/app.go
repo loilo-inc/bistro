@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/loilo-inc/bistro/pkg/bistro"
 	"github.com/urfave/cli/v3"
@@ -13,8 +14,7 @@ type App interface {
 }
 
 type app struct {
-	dpkg    bistro.Dpkg
-	ldd     bistro.Ldd
+	DI      bistro.DI
 	version string
 	commit  string
 	date    string
@@ -26,9 +26,10 @@ func New(version, commit, date string) App {
 	execer := bistro.NewExecer()
 	ldd := bistro.NewLdd(execer)
 	dpkg := bistro.NewDpkg(execer)
+	logger := bistro.NewLogger(os.Stdout, os.Stderr)
+
 	return &app{
-		dpkg:    dpkg,
-		ldd:     ldd,
+		DI:      bistro.DI{Dpkg: dpkg, Ldd: ldd, Logger: logger},
 		version: version,
 		commit:  commit,
 		date:    date,
@@ -93,7 +94,7 @@ func (c *app) Run(ctx context.Context, args []string) error {
 }
 
 func (c *app) scan(paths ...string) error {
-	scanner := bistro.NewScanner(c.ldd, c.dpkg)
+	scanner := bistro.NewScanner(c.DI)
 	var elfDeps []*bistro.ElfDependency
 	for _, path := range paths {
 		deps, err := scanner.Scan(path)
@@ -105,7 +106,11 @@ func (c *app) scan(paths ...string) error {
 	for _, elfDep := range elfDeps {
 		fmt.Printf("%s\n", elfDep.ElfFile.Path)
 		for _, exeDep := range elfDep.Dependencies {
-			fmt.Printf("  %s => %s\n", exeDep.Library.Path, exeDep.Package.Package)
+			pkgName := "<none>"
+			if exeDep.Package != nil {
+				pkgName = exeDep.Package.Package
+			}
+			fmt.Printf("  %s => %s\n", exeDep.Library.Path, pkgName)
 		}
 		for _, broken := range elfDep.BrokenLibs {
 			fmt.Printf("  [BROKEN] %s\n", broken)
@@ -115,6 +120,6 @@ func (c *app) scan(paths ...string) error {
 }
 
 func (c *app) bundle(input bistro.BundleInput) error {
-	bundler := bistro.NewBundler(c.dpkg, c.ldd)
+	bundler := bistro.NewBundler(c.DI)
 	return bundler.Bundle(input)
 }

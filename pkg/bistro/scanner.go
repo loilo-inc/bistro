@@ -11,8 +11,7 @@ type Scanner interface {
 }
 
 type scanner struct {
-	ldd       Ldd
-	dpkg      Dpkg
+	DI
 	finder    Finder
 	fileCache map[string]*ElfFile
 	depsCache map[string]*ElfDependency
@@ -20,11 +19,10 @@ type scanner struct {
 
 var _ Scanner = &scanner{}
 
-func NewScanner(ldd Ldd, dpkg Dpkg) Scanner {
-	finder := NewFinder(dpkg, ldd)
+func NewScanner(di DI) Scanner {
+	finder := NewFinder(di.Dpkg, di.Ldd)
 	return &scanner{
-		ldd:       ldd,
-		dpkg:      dpkg,
+		DI:        di,
 		finder:    finder,
 		fileCache: map[string]*ElfFile{},
 		depsCache: map[string]*ElfDependency{},
