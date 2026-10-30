@@ -58,12 +58,60 @@ func TestBundlerPackageOnly(t *testing.T) {
 	assert.Equal(t, "font data", readBundleTar(t, out)[rootFSArchiveName(file)].body)
 }
 
+func TestBundlerCollectsTargetPackage(t *testing.T) {
+	for _, dynamic := range []bool{false, true} {
+		for _, symlink := range []bool{false, true} {
+			name := "static"
+			if dynamic {
+				name = "dynamic"
+			}
+			if symlink {
+				name += " symlink"
+			}
+			t.Run(name, func(t *testing.T) {
+				dir := rootFSTempDir(t)
+				program, data := filepath.Join(dir, "program"), filepath.Join(dir, "data")
+				writeTestELF(t, program, elf.ET_EXEC, dynamic)
+				writeRootFSFile(t, data, "application data", 0644)
+				target := program
+				if symlink {
+					target = filepath.Join(dir, "alias")
+					require.NoError(t, os.Symlink("program", target))
+				}
+				pkg := &Package{Name: "app", Package: "app", Status: PackageStatusInstalled}
+				d := packageFilesStub(t, []*Package{pkg}, map[string][]string{pkg.Package: {program, data}})
+				traces := 0
+				l := stubLdd(func(path string) (*LinkInfo, error) {
+					traces++
+					assert.Equal(t, target, path)
+					return &LinkInfo{}, nil
+				})
+				out := filepath.Join(dir, "bundle.tar")
+				require.NoError(t, NewBundler(DI{Dpkg: d, Ldd: l}).Bundle(BundleInput{Out: out, Files: []string{target}}))
+				entries := readBundleTar(t, out)
+				assert.Contains(t, entries, rootFSArchiveName(program))
+				assert.Equal(t, "application data", entries[rootFSArchiveName(data)].body)
+				assert.Contains(t, entries, "var/lib/dpkg/status.d/app")
+				assert.Contains(t, entries, "var/lib/dpkg/status.d/app.md5sums")
+				if symlink {
+					assert.Equal(t, byte(tar.TypeSymlink), entries[rootFSArchiveName(target)].header.Typeflag)
+				}
+				if dynamic {
+					assert.Equal(t, 1, traces)
+				} else {
+					assert.Zero(t, traces)
+				}
+			})
+		}
+	}
+}
+
 func TestBundlerScanOnly(t *testing.T) {
 	dir := rootFSTempDir(t)
 	file := filepath.Join(dir, "static")
 	writeTestELF(t, file, elf.ET_EXEC, false)
 	out := filepath.Join(dir, "bundle.tar")
-	require.NoError(t, NewBundler(DI{}).Bundle(BundleInput{Out: out, Scans: []string{file}}))
+	require.NoError(t, NewBundler(DI{Dpkg: unownedFilesDpkg()}).Bundle(BundleInput{Out: out, Scans: []string{file}}))
 	assert.Empty(t, readBundleTar(t, out), "a scan contributes dependencies, not its target")
 }
 
@@ -80,7 +128,10 @@ func TestBundlerScansELFAndCollectsOwningPackages(t *testing.T) {
 	searches, queries, traces := 0, 0, 0
 	d.search = func(path string) ([]*OwnedFile, error) {
 		searches++
-		assert.Equal(t, library, path)
+		if path != library {
+			assert.Contains(t, []string{program, extension}, path)
+			return nil, nil
+		}
 		return []*OwnedFile{{Package: pkg.Package, File: path}}, nil
 	}
 	d.listPackages = func(names ...string) ([]*Package, error) {
@@ -104,12 +155,12 @@ func TestBundlerScansELFAndCollectsOwningPackages(t *testing.T) {
 	assert.Contains(t, entries, "var/lib/dpkg/status.d/libfoo")
 	assert.Contains(t, entries, "var/lib/dpkg/status.d/libfoo.md5sums")
 	assert.Equal(t, 2, traces)
-	assert.Equal(t, 1, searches)
+	assert.Equal(t, 3, searches)
 	assert.Equal(t, 1, queries)
 }
 
 func TestBundlerFailures(t *testing.T) {
-	for _, stage := range []string{"file scan", "directory scan", "packages", "broken library", "uninstalled explicit package", "uninstalled dependency", "baker"} {
+	for _, stage := range []string{"file scan", "directory scan", "packages", "broken library", "uninstalled explicit package", "uninstalled target package", "uninstalled dependency", "baker"} {
 		t.Run(stage, func(t *testing.T) {
 			dir := rootFSTempDir(t)
 			out := filepath.Join(dir, "bundle.tar")
@@ -126,6 +177,8 @@ func TestBundlerFailures(t *testing.T) {
 					return []*ElfDependency{{ElfFile: &ElfFile{Path: path}, BrokenLibs: []string{"libmissing.so"}}}, nil
 				case "uninstalled dependency":
 					return []*ElfDependency{{ElfFile: &ElfFile{Path: path}, Dependencies: []*ExeDependency{{Package: &Package{Name: "broken", Package: "broken", Status: "unpacked"}}}}}, nil
+				case "uninstalled target package":
+					return []*ElfDependency{{ElfFile: &ElfFile{Path: path}, Package: &Package{Name: "broken", Package: "broken", Status: "unpacked"}}}, nil
 				}
 				return nil, nil
 			})
@@ -152,7 +205,7 @@ func TestBundlerFailures(t *testing.T) {
 				}
 				b.Dpkg = d
 				want = "packages are not installed: broken"
-			case "uninstalled dependency":
+			case "uninstalled dependency", "uninstalled target package":
 				input.Scans = []string{"app"}
 				want = "packages are not installed: broken"
 			case "baker":
@@ -179,7 +232,7 @@ func TestBundlerFailures(t *testing.T) {
 func TestBundlerReuseRefreshesScanner(t *testing.T) {
 	dir := rootFSTempDir(t)
 	file := filepath.Join(dir, "program")
-	b := NewBundler(DI{})
+	b := NewBundler(DI{Dpkg: unownedFilesDpkg()})
 	for i, typ := range []elf.Type{elf.ET_REL, elf.ET_EXEC} {
 		writeTestELF(t, file, typ, false)
 		out := filepath.Join(dir, "bundle.tar")

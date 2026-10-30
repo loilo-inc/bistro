@@ -8,6 +8,7 @@ import (
 
 type Finder interface {
 	TraceDepsForExecutable(file string) (*ExeTraceResult, error)
+	FindPackageForExecutable(file string) (*Package, error)
 }
 
 type finder struct {
@@ -42,12 +43,14 @@ func (b *finder) TraceDepsForExecutable(file string) (*ExeTraceResult, error) {
 	if !filepath.IsAbs(file) {
 		return nil, errors.New("file path is not absolute: " + file)
 	}
+
+	var result ExeTraceResult
+
 	info, err := b.listLibs(file)
 	if err != nil {
 		return nil, err
 	}
 
-	var result ExeTraceResult
 	for _, lib := range info.Libs {
 		if lib.IsBroken() {
 			result.BrokenLibs = append(result.BrokenLibs, lib.Name)
@@ -67,6 +70,17 @@ func (b *finder) TraceDepsForExecutable(file string) (*ExeTraceResult, error) {
 		})
 	}
 	return &result, nil
+}
+
+func (b *finder) FindPackageForExecutable(file string) (*Package, error) {
+	if !filepath.IsAbs(file) {
+		return nil, errors.New("file path is not absolute: " + file)
+	}
+	realpath, err := realpath(file)
+	if err != nil {
+		return nil, err
+	}
+	return b.searchPackage(realpath)
 }
 
 func (f *finder) listLibs(file string) (*LinkInfo, error) {

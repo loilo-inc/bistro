@@ -30,9 +30,21 @@ type stubLdd func(string) (*LinkInfo, error)
 
 func (s stubLdd) ListObjects(path string) (*LinkInfo, error) { return s(path) }
 
-type stubFinder func(string) (*ExeTraceResult, error)
+type stubFinder struct {
+	trace       func(string) (*ExeTraceResult, error)
+	findPackage func(string) (*Package, error)
+}
 
-func (s stubFinder) TraceDepsForExecutable(path string) (*ExeTraceResult, error) { return s(path) }
+func (s stubFinder) TraceDepsForExecutable(path string) (*ExeTraceResult, error) {
+	return s.trace(path)
+}
+func (s stubFinder) FindPackageForExecutable(path string) (*Package, error) {
+	return s.findPackage(path)
+}
+
+func unownedFilesDpkg() stubDpkg {
+	return stubDpkg{search: func(string) ([]*OwnedFile, error) { return nil, nil }}
+}
 
 type stubScanner func(string) ([]*ElfDependency, error)
 
@@ -103,6 +115,17 @@ func readBundleTar(t *testing.T, path string) map[string]rootFSEntry {
 func packageFilesStub(t *testing.T, packages []*Package, files map[string][]string) stubDpkg {
 	t.Helper()
 	return stubDpkg{
+		search: func(path string) ([]*OwnedFile, error) {
+			var owners []*OwnedFile
+			for _, pkg := range packages {
+				for _, file := range files[pkg.Package] {
+					if file == path {
+						owners = append(owners, &OwnedFile{Package: pkg.Package, File: path})
+					}
+				}
+			}
+			return owners, nil
+		},
 		listPackages: func(names ...string) ([]*Package, error) { return packages, nil },
 		listFiles:    func(name string) ([]string, error) { return files[name], nil },
 		status: func(name string) ([]byte, error) {

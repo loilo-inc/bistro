@@ -36,7 +36,9 @@ type ElfFile struct {
 }
 
 type ElfDependency struct {
-	ElfFile      *ElfFile
+	ElfFile *ElfFile
+	// Package that provides the ELF file itself, if available
+	Package      *Package
 	Dependencies []*ExeDependency
 	BrokenLibs   []string
 }
@@ -90,6 +92,13 @@ func (s *scanner) ScanFile(file *ElfFile) (*ElfDependency, error) {
 	result := &ElfDependency{
 		ElfFile:      file,
 		Dependencies: nil,
+	}
+	selfPkg, err := s.finder.FindPackageForExecutable(file.Path)
+	if err != nil && err != errPackageNotFound {
+		return nil, err
+	}
+	if selfPkg != nil {
+		result.Package = selfPkg
 	}
 	if file.NeedsLdd {
 		trace, err := s.finder.TraceDepsForExecutable(file.Path)

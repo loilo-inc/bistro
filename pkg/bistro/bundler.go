@@ -137,6 +137,9 @@ func (b *bundler) addDependency(deps ...*ElfDependency) {
 		if len(dep.BrokenLibs) > 0 {
 			b.brokenDeps = append(b.brokenDeps, dep)
 		}
+		if dep.Package != nil {
+			b.addPackage(dep.Package)
+		}
 		for _, exeDep := range dep.Dependencies {
 			if exeDep.Package != nil {
 				b.addPackage(exeDep.Package)
