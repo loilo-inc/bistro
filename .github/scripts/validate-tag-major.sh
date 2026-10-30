@@ -2,13 +2,13 @@
 set -euo pipefail
 
 module="$(awk '/^module /{print $2}' go.mod)"
-mod_major="1"
-if [[ "$module" =~ /v([0-9]+)$ ]]; then
+mod_major="0"
+if [[ "$module" =~ /v([1-9]+)$ ]]; then
   mod_major="${BASH_REMATCH[1]}"
 fi
 
 tag="${GITHUB_REF_NAME}"
-if [[ "$tag" =~ ^v([0-9]+)\. ]]; then
+if [[ "$tag" =~ ^v([1-9]+)\. ]]; then
   tag_major="${BASH_REMATCH[1]}"
 else
   echo "::error ::Tag must start with v<major>., got: ${tag}"
