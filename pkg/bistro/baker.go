@@ -1,6 +1,7 @@
 package bistro
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -26,6 +27,15 @@ type BakeInput struct {
 }
 
 func (b *baker) CreateRootFS(input *BakeInput) (err error) {
+	// Distroless metadata filenames use the unqualified package name.
+	// Reject collisions before creating an archive that would lose metadata.
+	names := make(map[string]string, len(input.DpkgList))
+	for _, pkg := range input.DpkgList {
+		if previous, ok := names[pkg.Name]; ok {
+			return fmt.Errorf("package metadata name conflict: %s and %s use %s", previous, pkg.Package, pkg.Name)
+		}
+		names[pkg.Name] = pkg.Package
+	}
 	tmpFile, err := os.CreateTemp(filepath.Dir(input.Out), "rootfs")
 	if err != nil {
 		return err
@@ -68,14 +78,14 @@ func (b *baker) writePackageMetadata(rootFS RootFS, pkg *Package) error {
 	if err != nil {
 		return err
 	}
-	if err = rootFS.Add(filepath.Join(DpkgStatusDir, pkg.Package), status, 0644); err != nil {
+	if err = rootFS.Add(filepath.Join(DpkgStatusDir, pkg.Name), status, 0644); err != nil {
 		return err
 	}
 	md5sums, err := b.Dpkg.PackageMd5Sums(pkg.Package)
 	if err != nil {
 		return err
 	}
-	if err = rootFS.Add(filepath.Join(DpkgStatusDir, pkg.Package+".md5sums"), md5sums, 0644); err != nil {
+	if err = rootFS.Add(filepath.Join(DpkgStatusDir, pkg.Name+".md5sums"), md5sums, 0644); err != nil {
 		return err
 	}
 	files, err := b.Dpkg.ListFiles(pkg.Package)

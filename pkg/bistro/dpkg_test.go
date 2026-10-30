@@ -38,16 +38,16 @@ func TestDpkgListPackages(t *testing.T) {
 			d := NewDpkg(dpkgTestExecer(func(name string, args ...string) ([]byte, error) {
 				calls++
 				assert.Equal(t, "dpkg-query", name)
-				wantArgs := append([]string{"-W", "-f=${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n"}, tt.args...)
+				wantArgs := append([]string{"-W", "-f=${Package}\t${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n"}, tt.args...)
 				assert.Equal(t, wantArgs, args)
 				return readDpkgFixture(t, "packages.txt"), nil
 			}))
 			got, err := d.ListPackages(tt.groups...)
 			require.NoError(t, err)
 			assert.Equal(t, []*Package{
-				{Package: "libc6:amd64", Version: "2.36-9+deb12u1", Architecture: "amd64", Status: "installed"},
-				{Package: "libc6:i386", Version: "2.36-9+deb12u1", Architecture: "i386", Status: "installed"},
-				{Package: "example", Version: "1:2.0-3", Architecture: "all", Status: "config-files"},
+				{Name: "libc6", Package: "libc6:amd64", Version: "2.36-9+deb12u1", Architecture: "amd64", Status: "installed"},
+				{Name: "libc6", Package: "libc6:i386", Version: "2.36-9+deb12u1", Architecture: "i386", Status: "installed"},
+				{Name: "example", Package: "example", Version: "1:2.0-3", Architecture: "all", Status: "config-files"},
 			}, got)
 			assert.Equal(t, 1, calls)
 		})
@@ -207,19 +207,19 @@ func TestDpkgEmptyOutput(t *testing.T) {
 
 func TestDpkgListPackagesSkipsIncompleteRows(t *testing.T) {
 	d := NewDpkg(dpkgTestExecer(func(string, ...string) ([]byte, error) {
-		return []byte("missing-fields\nname\tversion\tarch\nvalid:arm64\t1.0\tarm64\tinstalled\n"), nil
+		return []byte("missing-fields\nname\tversion\tarch\nvalid:arm64\t1.0\tarm64\tinstalled\nvalid\tvalid:arm64\t1.0\tarm64\tinstalled\n"), nil
 	}))
 	got, err := d.ListPackages()
 	require.NoError(t, err)
-	assert.Equal(t, []*Package{{Package: "valid:arm64", Version: "1.0", Architecture: "arm64", Status: "installed"}}, got)
+	assert.Equal(t, []*Package{{Name: "valid", Package: "valid:arm64", Version: "1.0", Architecture: "arm64", Status: "installed"}}, got)
 }
 
 func TestDiffPackages(t *testing.T) {
-	old := &Package{Package: "libc6:amd64", Version: "1", Architecture: "amd64", Status: "installed"}
-	updated := &Package{Package: "libc6:amd64", Version: "2", Architecture: "amd64", Status: "installed"}
-	otherArch := &Package{Package: "libc6:i386", Version: "1", Architecture: "i386", Status: "installed"}
-	added := &Package{Package: "added", Version: "1"}
-	removed := &Package{Package: "removed", Version: "1"}
+	old := &Package{Name: "libc6", Package: "libc6:amd64", Version: "1", Architecture: "amd64", Status: "installed"}
+	updated := &Package{Name: "libc6", Package: "libc6:amd64", Version: "2", Architecture: "amd64", Status: "installed"}
+	otherArch := &Package{Name: "libc6", Package: "libc6:i386", Version: "1", Architecture: "i386", Status: "installed"}
+	added := &Package{Name: "added", Package: "added", Version: "1"}
+	removed := &Package{Name: "removed", Package: "removed", Version: "1"}
 	for _, tt := range []struct {
 		name          string
 		before, after []*Package

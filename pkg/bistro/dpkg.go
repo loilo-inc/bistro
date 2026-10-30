@@ -25,6 +25,9 @@ func NewDpkg(execer Execer) Dpkg {
 }
 
 type Package struct {
+	// ${Package} from dpkg-query output
+	Name string `json:"name"`
+	// ${binary:Package} from dpkg-query output
 	Package      string `json:"package"`
 	Version      string `json:"version"`
 	Architecture string `json:"architecture"`
@@ -39,7 +42,7 @@ type OwnedFile struct {
 }
 
 func (b *dpkg) ListPackages(packages ...string) (dpkgList []*Package, err error) {
-	args := []string{"-W", "-f=${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n"}
+	args := []string{"-W", "-f=${Package}\t${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n"}
 	args = append(args, packages...)
 	out, err := b.execer.Output("dpkg-query", args...)
 	if err != nil {
@@ -48,14 +51,15 @@ func (b *dpkg) ListPackages(packages ...string) (dpkgList []*Package, err error)
 	tsv := parseTabSplitData(out)
 	dpkgList = make([]*Package, 0, len(tsv))
 	for _, row := range tsv {
-		if len(row) < 4 {
+		if len(row) < 5 {
 			continue
 		}
 		dpkgList = append(dpkgList, &Package{
-			Package:      row[0],
-			Version:      row[1],
-			Architecture: row[2],
-			Status:       row[3],
+			Name:         row[0],
+			Package:      row[1],
+			Version:      row[2],
+			Architecture: row[3],
+			Status:       row[4],
 		})
 	}
 	return dpkgList, nil

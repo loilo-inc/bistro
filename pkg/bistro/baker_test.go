@@ -17,7 +17,7 @@ func TestBakerCreatesArchive(t *testing.T) {
 	owned, explicit := filepath.Join(dir, "owned"), filepath.Join(dir, "explicit")
 	writeRootFSFile(t, owned, "package data", 0640)
 	writeRootFSFile(t, explicit, "binary", 0755)
-	pkg := &Package{Package: "example:arm64", Status: PackageStatusInstalled}
+	pkg := &Package{Name: "example", Package: "example:arm64", Status: PackageStatusInstalled}
 	d := packageFilesStub(t, []*Package{pkg}, map[string][]string{pkg.Package: {owned}})
 	out := filepath.Join(dir, "rootfs.tar")
 	writeRootFSFile(t, out, "previous archive", 0644)
@@ -28,8 +28,10 @@ func TestBakerCreatesArchive(t *testing.T) {
 	assert.Equal(t, int64(0640), entries[rootFSArchiveName(owned)].header.Mode)
 	assert.Equal(t, "binary", entries[rootFSArchiveName(explicit)].body)
 	assert.Equal(t, int64(0755), entries[rootFSArchiveName(explicit)].header.Mode)
-	assert.Equal(t, "Package: example:arm64\nStatus: install ok installed\n", entries["var/lib/dpkg/status.d/example:arm64"].body)
-	assert.Equal(t, "checksum example:arm64\n", entries["var/lib/dpkg/status.d/example:arm64.md5sums"].body)
+	assert.Equal(t, "Package: example\nStatus: install ok installed\n", entries["var/lib/dpkg/status.d/example"].body)
+	assert.Equal(t, "checksum example:arm64\n", entries["var/lib/dpkg/status.d/example.md5sums"].body)
+	assert.NotContains(t, entries, "var/lib/dpkg/status.d/example:arm64")
+	assert.NotContains(t, entries, "var/lib/dpkg/status.d/example:arm64.md5sums")
 	leftovers, err := filepath.Glob(filepath.Join(dir, "rootfs[0-9]*"))
 	require.NoError(t, err)
 	assert.Empty(t, leftovers)
@@ -39,7 +41,7 @@ func TestBakerSkipsMissingPackageFiles(t *testing.T) {
 	dir := rootFSTempDir(t)
 	missing, owned := filepath.Join(dir, "missing"), filepath.Join(dir, "owned")
 	writeRootFSFile(t, owned, "package data", 0644)
-	pkg := &Package{Package: "example"}
+	pkg := &Package{Name: "example", Package: "example"}
 	d := packageFilesStub(t, []*Package{pkg}, map[string][]string{pkg.Package: {missing, owned}})
 	var stderr bytes.Buffer
 	out := filepath.Join(dir, "archive.tar")
@@ -65,7 +67,7 @@ func TestBakerFailurePreservesOutputAndRemovesTemporaryFile(t *testing.T) {
 				writeRootFSFile(t, out, "original", 0644)
 			}
 			failure := errors.New("metadata unavailable")
-			pkg := &Package{Package: "example"}
+			pkg := &Package{Name: "example", Package: "example"}
 			d := packageFilesStub(t, []*Package{pkg}, nil)
 			if stage == "status" {
 				d.status = func(string) ([]byte, error) { return nil, failure }
@@ -107,6 +109,26 @@ func TestBakerMissingOutputDirectory(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
+func TestBakerRejectsConflictingMetadataNames(t *testing.T) {
+	dir := rootFSTempDir(t)
+	out := filepath.Join(dir, "archive.tar")
+	writeRootFSFile(t, out, "original", 0644)
+	err := NewBaker(DI{}).CreateRootFS(&BakeInput{
+		Out: out,
+		DpkgList: []*Package{
+			{Name: "library", Package: "library:arm64", Architecture: "arm64"},
+			{Name: "library", Package: "library:amd64", Architecture: "amd64"},
+		},
+	})
+	require.ErrorContains(t, err, "package metadata name conflict: library:arm64 and library:amd64 use library")
+	data, err := os.ReadFile(out)
+	require.NoError(t, err)
+	assert.Equal(t, "original", string(data))
+	files, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, files, 1, "no temporary archive should be created")
+}
+
 type failingMetadataRoot struct {
 	RootFS
 	calls, failAt int
@@ -127,7 +149,7 @@ func TestBakerMetadataWriteFailures(t *testing.T) {
 			failure := errors.New("archive write failed")
 			r := &failingMetadataRoot{failAt: failAt, err: failure}
 			b := NewBaker(DI{Dpkg: packageFilesStub(t, nil, nil)}).(*baker)
-			require.ErrorIs(t, b.writePackageMetadata(r, &Package{Package: "example"}), failure)
+			require.ErrorIs(t, b.writePackageMetadata(r, &Package{Name: "example", Package: "example"}), failure)
 			assert.Equal(t, failAt, r.calls)
 		})
 	}

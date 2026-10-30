@@ -19,13 +19,13 @@ func TestBundlerMergesInputs(t *testing.T) {
 	writeRootFSFile(t, file, "program", 0755)
 	writeRootFSFile(t, scan, "scan target", 0644)
 	writeRootFSFile(t, owned, "shared library", 0644)
-	pkg := &Package{Package: "library:arm64", Status: PackageStatusInstalled}
-	otherArch := &Package{Package: "library:amd64", Status: PackageStatusInstalled}
-	d := packageFilesStub(t, []*Package{pkg, otherArch}, map[string][]string{pkg.Package: {owned}})
+	pkg := &Package{Name: "library", Package: "library:arm64", Status: PackageStatusInstalled}
+	other := &Package{Name: "other", Package: "other:arm64", Status: PackageStatusInstalled}
+	d := packageFilesStub(t, []*Package{pkg, other}, map[string][]string{pkg.Package: {owned}})
 	queries := 0
 	d.listPackages = func(names ...string) ([]*Package, error) {
-		assert.Equal(t, []string{pkg.Package, otherArch.Package}, names)
-		return []*Package{pkg, otherArch}, nil
+		assert.Equal(t, []string{pkg.Package, other.Package}, names)
+		return []*Package{pkg, other}, nil
 	}
 	status := d.status
 	d.status = func(name string) ([]byte, error) { queries++; return status(name) }
@@ -33,25 +33,25 @@ func TestBundlerMergesInputs(t *testing.T) {
 	var scanned []string
 	b.scanner = stubScanner(func(path string) ([]*ElfDependency, error) {
 		scanned = append(scanned, path)
-		return []*ElfDependency{{ElfFile: &ElfFile{Path: path}, Dependencies: []*ExeDependency{{Library: &Library{Path: "/lib/unowned.so"}}, {Package: pkg}, {Package: &Package{Package: pkg.Package, Status: pkg.Status}}}}}, nil
+		return []*ElfDependency{{ElfFile: &ElfFile{Path: path}, Dependencies: []*ExeDependency{{Library: &Library{Path: "/lib/unowned.so"}}, {Package: pkg}, {Package: &Package{Name: pkg.Name, Package: pkg.Package, Status: pkg.Status}}}}}, nil
 	})
 	out := filepath.Join(dir, "bundle.tar")
-	require.NoError(t, b.Bundle(BundleInput{Out: out, Files: []string{file, file}, Scans: []string{scan}, Packages: []string{pkg.Package, otherArch.Package}}))
+	require.NoError(t, b.Bundle(BundleInput{Out: out, Files: []string{file, file}, Scans: []string{scan}, Packages: []string{pkg.Package, other.Package}}))
 	assert.Equal(t, []string{file, file, scan}, scanned)
-	assert.Equal(t, 2, queries, "one metadata entry per package including architecture")
+	assert.Equal(t, 2, queries, "one metadata entry per package")
 	entries := readBundleTar(t, out)
 	assert.Contains(t, entries, rootFSArchiveName(file))
 	assert.Contains(t, entries, rootFSArchiveName(owned))
 	assert.NotContains(t, entries, rootFSArchiveName(scan))
-	assert.Contains(t, entries, "var/lib/dpkg/status.d/library:arm64")
-	assert.Contains(t, entries, "var/lib/dpkg/status.d/library:amd64")
+	assert.Contains(t, entries, "var/lib/dpkg/status.d/library")
+	assert.Contains(t, entries, "var/lib/dpkg/status.d/other")
 }
 
 func TestBundlerPackageOnly(t *testing.T) {
 	dir := rootFSTempDir(t)
 	file := filepath.Join(dir, "font.ttf")
 	writeRootFSFile(t, file, "font data", 0644)
-	pkg := &Package{Package: "fonts", Status: PackageStatusInstalled}
+	pkg := &Package{Name: "fonts", Package: "fonts", Status: PackageStatusInstalled}
 	d := packageFilesStub(t, []*Package{pkg}, map[string][]string{pkg.Package: {file}})
 	out := filepath.Join(dir, "bundle.tar")
 	require.NoError(t, NewBundler(DI{Dpkg: d}).Bundle(BundleInput{Out: out, Packages: []string{"fonts"}}))
@@ -75,7 +75,7 @@ func TestBundlerScansELFAndCollectsOwningPackages(t *testing.T) {
 	writeTestELF(t, program, elf.ET_EXEC, true)
 	writeTestELF(t, extension, elf.ET_DYN, false, "libfoo.so")
 	writeRootFSFile(t, library, "runtime library", 0644)
-	pkg := &Package{Package: "libfoo:arm64", Status: PackageStatusInstalled}
+	pkg := &Package{Name: "libfoo", Package: "libfoo:arm64", Status: PackageStatusInstalled}
 	d := packageFilesStub(t, []*Package{pkg}, map[string][]string{pkg.Package: {library}})
 	searches, queries, traces := 0, 0, 0
 	d.search = func(path string) ([]*OwnedFile, error) {
@@ -101,8 +101,8 @@ func TestBundlerScansELFAndCollectsOwningPackages(t *testing.T) {
 	assert.Contains(t, entries, rootFSArchiveName(program))
 	assert.NotContains(t, entries, rootFSArchiveName(extension))
 	assert.Equal(t, "runtime library", entries[rootFSArchiveName(library)].body)
-	assert.Contains(t, entries, "var/lib/dpkg/status.d/libfoo:arm64")
-	assert.Contains(t, entries, "var/lib/dpkg/status.d/libfoo:arm64.md5sums")
+	assert.Contains(t, entries, "var/lib/dpkg/status.d/libfoo")
+	assert.Contains(t, entries, "var/lib/dpkg/status.d/libfoo.md5sums")
 	assert.Equal(t, 2, traces)
 	assert.Equal(t, 1, searches)
 	assert.Equal(t, 1, queries)
@@ -125,7 +125,7 @@ func TestBundlerFailures(t *testing.T) {
 				case "broken library":
 					return []*ElfDependency{{ElfFile: &ElfFile{Path: path}, BrokenLibs: []string{"libmissing.so"}}}, nil
 				case "uninstalled dependency":
-					return []*ElfDependency{{ElfFile: &ElfFile{Path: path}, Dependencies: []*ExeDependency{{Package: &Package{Package: "broken", Status: "unpacked"}}}}}, nil
+					return []*ElfDependency{{ElfFile: &ElfFile{Path: path}, Dependencies: []*ExeDependency{{Package: &Package{Name: "broken", Package: "broken", Status: "unpacked"}}}}}, nil
 				}
 				return nil, nil
 			})
@@ -274,7 +274,7 @@ func TestBundlerCopyMergesAndDeduplicates(t *testing.T) {
 	copiedELF := filepath.Join(dir, "tree", "dynamic.so")
 	writeTestELF(t, file, elf.ET_EXEC, false)
 	writeTestELF(t, copiedELF, elf.ET_DYN, false, "not-installed.so")
-	pkg := &Package{Package: "example:arm64", Status: PackageStatusInstalled}
+	pkg := &Package{Name: "example", Package: "example:arm64", Status: PackageStatusInstalled}
 	d := packageFilesStub(t, []*Package{pkg}, map[string][]string{pkg.Package: {file}})
 	out := filepath.Join(dir, "bundle.tar")
 	// A nil Ldd makes an unexpected dependency scan of a copied ELF fail.
@@ -289,7 +289,7 @@ func TestBundlerCopyMergesAndDeduplicates(t *testing.T) {
 		require.Contains(t, entries, rootFSArchiveName(path))
 		assert.Equal(t, string(data), entries[rootFSArchiveName(path)].body)
 	}
-	assert.Contains(t, entries, "var/lib/dpkg/status.d/example:arm64")
+	assert.Contains(t, entries, "var/lib/dpkg/status.d/example")
 }
 
 func TestBundlerCopyFailureAndReuse(t *testing.T) {

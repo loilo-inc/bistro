@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -105,7 +106,8 @@ func packageFilesStub(t *testing.T, packages []*Package, files map[string][]stri
 		listPackages: func(names ...string) ([]*Package, error) { return packages, nil },
 		listFiles:    func(name string) ([]string, error) { return files[name], nil },
 		status: func(name string) ([]byte, error) {
-			return []byte("Package: " + name + "\nStatus: install ok installed\n"), nil
+			packageName, _, _ := strings.Cut(name, ":")
+			return []byte("Package: " + packageName + "\nStatus: install ok installed\n"), nil
 		},
 		md5sums: func(name string) ([]byte, error) { return []byte("checksum " + name + "\n"), nil },
 	}
