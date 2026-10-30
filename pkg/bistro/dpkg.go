@@ -1,6 +1,10 @@
 package bistro
 
-import "strings"
+import (
+	"errors"
+	"os/exec"
+	"strings"
+)
 
 type Dpkg interface {
 	ListPackages(packages ...string) ([]*Package, error)
@@ -75,6 +79,13 @@ func (b *dpkg) PackageMd5Sums(pkgName string) ([]byte, error) {
 
 func (b *dpkg) Search(pattern string) (packages []*OwnedFile, err error) {
 	out, err := b.execer.Output("dpkg-query", "-S", pattern)
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) &&
+		exitErr.ExitCode() == 1 &&
+		strings.Contains(string(exitErr.Stderr), "no path found matching pattern") {
+		// No results found
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -1,8 +1,10 @@
 package bistro
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 )
@@ -22,11 +24,16 @@ var _ Execer = &defaultExecer{}
 
 func (e *defaultExecer) Output(name string, arg ...string) ([]byte, error) {
 	cmd := exec.Command(name, arg...)
-	cmd.Stderr = os.Stderr
+	var stderr bytes.Buffer
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
 	// Set environment variables to ensure consistent locale of dpkg-query
 	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANGUAGE=C", "LANG=C")
 	output, err := cmd.Output()
 	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitErr.Stderr = stderr.Bytes()
+		}
 		return nil, errors.Join(
 			fmt.Errorf("subcommand failed: %s", name),
 			err,

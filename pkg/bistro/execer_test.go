@@ -23,7 +23,14 @@ func TestExecerHelperProcess(t *testing.T) {
 		fmt.Printf("%s|%s|%s|%s", os.Getenv("LC_ALL"), os.Getenv("LANGUAGE"), os.Getenv("LANG"), os.Getenv("BISTRO_TEST_INHERITED"))
 	case "failure":
 		fmt.Print("partial output")
+		fmt.Fprint(os.Stderr, "command diagnostic\n")
 		os.Exit(23)
+	case "dpkg-not-found":
+		fmt.Fprint(os.Stderr, "dpkg-query: no path found matching pattern /usr/local/lib/library.so\n")
+		os.Exit(1)
+	case "dpkg-error":
+		fmt.Fprint(os.Stderr, "dpkg-query: query failed\n")
+		os.Exit(1)
 	default:
 		fmt.Print(os.Args[len(os.Args)-1])
 	}
@@ -52,6 +59,7 @@ func TestExecerOutput(t *testing.T) {
 	var exitErr *exec.ExitError
 	require.True(t, errors.As(err, &exitErr))
 	assert.Equal(t, 23, exitErr.ExitCode())
+	assert.Equal(t, "command diagnostic\n", string(exitErr.Stderr))
 	out, err = e.Output(filepath.Join(t.TempDir(), "missing"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	assert.Nil(t, out)

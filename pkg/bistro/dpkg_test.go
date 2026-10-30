@@ -3,6 +3,7 @@ package bistro
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -78,6 +79,51 @@ func TestDpkgSearch(t *testing.T) {
 		{Package: "libc6:i386", File: "/usr/share/example/copyright"},
 		{Package: "example", File: "/usr/share/example/file: with spaces"},
 	}, got)
+}
+
+func TestDpkgSearchExitErrors(t *testing.T) {
+	executable, err := os.Executable()
+	require.NoError(t, err)
+	t.Setenv("BISTRO_TEST_HELPER", "1")
+	for _, tt := range []struct {
+		name    string
+		mode    string
+		noMatch bool
+	}{
+		{name: "no matching path", mode: "dpkg-not-found", noMatch: true},
+		{name: "other exit one", mode: "dpkg-error"},
+		{name: "fatal error", mode: "failure"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			libraryPath := filepath.Join(rootFSTempDir(t), "library.so")
+			writeRootFSFile(t, libraryPath, "library", 0644)
+			_, commandErr := NewExecer().Output(executable, "-test.run=^TestExecerHelperProcess$", "--", tt.mode)
+			var exitErr *exec.ExitError
+			require.ErrorAs(t, commandErr, &exitErr)
+			d := NewDpkg(dpkgTestExecer(func(name string, args ...string) ([]byte, error) {
+				assert.Equal(t, "dpkg-query", name)
+				assert.Equal(t, []string{"-S", libraryPath}, args)
+				return nil, commandErr
+			}))
+			got, err := d.Search(libraryPath)
+			assert.Nil(t, got)
+			if tt.noMatch {
+				require.NoError(t, err)
+				library := &Library{Name: "library.so", Path: libraryPath}
+				f := NewFinder(d, stubLdd(func(string) (*LinkInfo, error) {
+					return &LinkInfo{Libs: []*Library{library}}, nil
+				}))
+				result, err := f.TraceDepsForExecutable("/bin/app")
+				require.NoError(t, err)
+				require.Len(t, result.Dependencies, 1)
+				assert.Same(t, library, result.Dependencies[0].Library)
+				assert.Nil(t, result.Dependencies[0].Package)
+				assert.Empty(t, result.BrokenLibs)
+			} else {
+				assert.ErrorIs(t, err, commandErr)
+			}
+		})
+	}
 }
 
 func TestDpkgMetadata(t *testing.T) {
