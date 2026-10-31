@@ -18,7 +18,7 @@ type stubQuery struct {
 	dpkg.Query
 	baseDir string
 	get     func(string) (*dpkg.Package, error)
-	search  func(string) ([]*dpkg.OwnedFile, error)
+	lookup  func(string) (*dpkg.Package, error)
 }
 
 func (s stubQuery) Get(name string) (*dpkg.Package, error) {
@@ -27,11 +27,11 @@ func (s stubQuery) Get(name string) (*dpkg.Package, error) {
 	}
 	return s.Query.Get(name)
 }
-func (s stubQuery) Search(path string) ([]*dpkg.OwnedFile, error) {
-	if s.search != nil {
-		return s.search(path)
+func (s stubQuery) LookUp(path string) (*dpkg.Package, error) {
+	if s.lookup != nil {
+		return s.lookup(path)
 	}
-	return s.Query.Search(path)
+	return s.Query.LookUp(path)
 }
 
 type dpkgTestExecer func(string, ...string) ([]byte, error)
@@ -54,7 +54,7 @@ func (s stubFinder) FindPackageForExecutable(path string) (*dpkg.Package, error)
 	return s.findPackage(path)
 }
 func unownedFilesQuery() stubQuery {
-	return stubQuery{search: func(string) ([]*dpkg.OwnedFile, error) { return nil, nil }}
+	return stubQuery{lookup: func(string) (*dpkg.Package, error) { return nil, nil }}
 }
 
 func testPackage(t *testing.T, binaryName, version, arch, status string) *dpkg.Package {

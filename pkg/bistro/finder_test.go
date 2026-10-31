@@ -18,12 +18,12 @@ func TestFinderTraceAndCaches(t *testing.T) {
 	writeRootFSFile(t, second, "two", 0644)
 	alias := filepath.Join(dir, "alias.so")
 	require.NoError(t, os.Symlink("libone.so", alias))
-	lddCalls, searches := 0, 0
+	lddCalls, lookups := 0, 0
 	pkg := testPackage(t, "shared:arm64", "", "", "unpacked")
-	q := stubQuery{search: func(path string) ([]*dpkg.OwnedFile, error) {
-		searches++
+	q := stubQuery{lookup: func(path string) (*dpkg.Package, error) {
+		lookups++
 		assert.Contains(t, []string{first, second}, path)
-		return []*dpkg.OwnedFile{{Package: pkg, File: path}}, nil
+		return pkg, nil
 	}}
 	libs := []*Library{{Name: "one", Path: alias}, {Name: "alias", Path: first}, {Name: "missing"}, {Name: "two", Path: second}}
 	f := NewFinder(DI{Query: q, Ldd: stubLdd(func(path string) (*LinkInfo, error) {
@@ -42,7 +42,7 @@ func TestFinderTraceAndCaches(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 2, lddCalls)
-	assert.Equal(t, 2, searches, "cache by resolved library path")
+	assert.Equal(t, 9, lookups, "look up each resolved dependency through the query index")
 }
 
 func TestFinderFailures(t *testing.T) {
@@ -51,24 +51,24 @@ func TestFinderFailures(t *testing.T) {
 	failure := errors.New("query failed")
 	for _, tc := range []struct {
 		name, path        string
-		lddErr, searchErr error
+		lddErr, lookupErr error
 		want              string
 	}{
 		{name: "relative executable", path: "relative", want: "file path is not absolute"},
 		{name: "ldd failure", lddErr: failure, want: failure.Error()},
-		{name: "search failure", searchErr: failure, want: failure.Error()},
+		{name: "lookup failure", lookupErr: failure, want: failure.Error()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := tc.path
 			if path == "" {
 				path = "/bin/app"
 			}
-			q := stubQuery{search: func(string) ([]*dpkg.OwnedFile, error) { return nil, tc.searchErr }}
+			q := stubQuery{lookup: func(string) (*dpkg.Package, error) { return nil, tc.lookupErr }}
 			f := NewFinder(DI{Query: q, Ldd: stubLdd(func(string) (*LinkInfo, error) { return &LinkInfo{Libs: []*Library{{Path: lib}}}, tc.lddErr })})
 			result, err := f.TraceDepsForExecutable(path)
 			assert.Nil(t, result)
 			require.ErrorContains(t, err, tc.want)
-			if tc.lddErr != nil || tc.searchErr != nil {
+			if tc.lddErr != nil || tc.lookupErr != nil {
 				assert.ErrorIs(t, err, failure)
 			}
 		})
@@ -78,17 +78,17 @@ func TestFinderFailures(t *testing.T) {
 func TestFinderRetriesFailedCommands(t *testing.T) {
 	lib := filepath.Join(rootFSTempDir(t), "library")
 	writeRootFSFile(t, lib, "library", 0644)
-	for _, stage := range []string{"ldd", "search"} {
+	for _, stage := range []string{"ldd", "lookup"} {
 		t.Run(stage, func(t *testing.T) {
 			failure := errors.New("transient failure")
 			calls := map[string]int{}
 			fail := func(name string) bool { calls[name]++; return name == stage && calls[name] == 1 }
 			pkg := testPackage(t, "pkg", "", "", "installed")
-			q := stubQuery{search: func(string) ([]*dpkg.OwnedFile, error) {
-				if fail("search") {
+			q := stubQuery{lookup: func(string) (*dpkg.Package, error) {
+				if fail("lookup") {
 					return nil, failure
 				}
-				return []*dpkg.OwnedFile{{Package: pkg, File: lib}}, nil
+				return pkg, nil
 			}}
 			f := NewFinder(DI{Query: q, Ldd: stubLdd(func(string) (*LinkInfo, error) {
 				if fail("ldd") {
@@ -111,7 +111,7 @@ func TestFinderUnownedLibrary(t *testing.T) {
 	lib := filepath.Join(rootFSTempDir(t), "library.so")
 	writeRootFSFile(t, lib, "library", 0644)
 	library := &Library{Name: "library.so", Path: lib}
-	q := stubQuery{search: func(path string) ([]*dpkg.OwnedFile, error) {
+	q := stubQuery{lookup: func(path string) (*dpkg.Package, error) {
 		assert.Equal(t, lib, path)
 		return nil, nil
 	}}

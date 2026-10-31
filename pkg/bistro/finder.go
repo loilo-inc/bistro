@@ -15,8 +15,7 @@ type Finder interface {
 
 type finder struct {
 	DI
-	lddCache    map[string]*LinkInfo
-	searchCache map[string]*dpkg.Package
+	lddCache map[string]*LinkInfo
 }
 
 type ExeDependency struct {
@@ -26,9 +25,8 @@ type ExeDependency struct {
 
 func NewFinder(di DI) Finder {
 	return &finder{
-		DI:          di,
-		lddCache:    map[string]*LinkInfo{},
-		searchCache: map[string]*dpkg.Package{},
+		DI:       di,
+		lddCache: map[string]*LinkInfo{},
 	}
 }
 
@@ -98,18 +96,14 @@ func (f *finder) listLibs(file string) (*LinkInfo, error) {
 var errPackageNotFound = errors.New("package not found")
 
 func (f *finder) searchPackage(file string) (*dpkg.Package, error) {
-	if cache, ok := f.searchCache[file]; ok {
-		return cache, nil
-	}
-	result, err := f.DI.Query.Search(file)
+	result, err := f.DI.Query.LookUp(file)
 	if err != nil {
 		return nil, err
 	}
-	if len(result) == 0 {
+	if result == nil {
 		return nil, errPackageNotFound
 	}
-	f.searchCache[file] = result[0].Package
-	return result[0].Package, nil
+	return result, nil
 }
 
 func realpath(file string) (string, error) {

@@ -32,7 +32,7 @@ type Md5Sums struct {
 func (m *Md5Sums) String() string {
 	var sb strings.Builder
 	for _, entry := range m.Entries {
-		sb.WriteString(fmt.Sprintf("%s  %s\n", entry.Sum, entry.File))
+		fmt.Fprintf(&sb, "%s  %s\n", entry.Sum, entry.File)
 	}
 	return sb.String()
 }
@@ -154,7 +154,7 @@ func (p *Package) Md5Sums() (*Md5Sums, error) {
 func (p *Package) String() string {
 	var sb strings.Builder
 	for _, field := range p.fields {
-		sb.WriteString(fmt.Sprintf("%s: %s\n", field.Key, field.Value))
+		fmt.Fprintf(&sb, "%s: %s\n", field.Key, field.Value)
 	}
 	return sb.String()
 }

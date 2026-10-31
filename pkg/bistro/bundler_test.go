@@ -152,14 +152,14 @@ func TestBundlerScansELFAndCollectsOwningPackages(t *testing.T) {
 	writeRootFSFile(t, library, "runtime library", 0644)
 	pkg := testPackage(t, "libfoo:arm64", "", "", dpkg.StatusInstalled)
 	d := packageFilesStub(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {library}})
-	searches, traces := 0, 0
-	d.search = func(path string) ([]*dpkg.OwnedFile, error) {
-		searches++
+	lookups, traces := 0, 0
+	d.lookup = func(path string) (*dpkg.Package, error) {
+		lookups++
 		if path != library {
 			assert.Contains(t, []string{program, extension}, path)
 			return nil, nil
 		}
-		return []*dpkg.OwnedFile{{Package: pkg, File: path}}, nil
+		return pkg, nil
 	}
 	l := stubLdd(func(path string) (*LinkInfo, error) {
 		traces++
@@ -177,7 +177,7 @@ func TestBundlerScansELFAndCollectsOwningPackages(t *testing.T) {
 	assert.Contains(t, entries, "var/lib/dpkg/status.d/libfoo")
 	assert.Contains(t, entries, "var/lib/dpkg/status.d/libfoo.md5sums")
 	assert.Equal(t, 2, traces)
-	assert.Equal(t, 3, searches)
+	assert.Equal(t, 4, lookups)
 }
 
 func TestBundlerFailures(t *testing.T) {

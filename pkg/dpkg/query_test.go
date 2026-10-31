@@ -16,7 +16,7 @@ func TestQueryBeforeLoad(t *testing.T) {
 	require.ErrorContains(t, err, "packages not loaded")
 	_, err = q.List()
 	require.ErrorContains(t, err, "packages not loaded")
-	_, err = q.Search("/usr/bin/example")
+	_, err = q.LookUp("/usr/bin/example")
 	require.ErrorContains(t, err, "packages not loaded")
 }
 
@@ -40,22 +40,25 @@ func TestQueryLoad(t *testing.T) {
 	require.ErrorContains(t, err, "package not found: missing")
 
 	for _, tc := range []struct {
-		pattern string
-		want    []*OwnedFile
+		path string
+		want *Package
 	}{
-		{"/usr/bin/example", []*OwnedFile{{Package: pkg, File: "/usr/bin/example"}}},
-		{"/usr/bin/*", []*OwnedFile{{Package: pkg, File: "/usr/bin/example"}, {Package: other, File: "/usr/bin/other"}}},
-		{"/usr/share/common", []*OwnedFile{{Package: pkg, File: "/usr/share/common"}, {Package: other, File: "/usr/share/common"}}},
+		{"/usr/bin/example", pkg},
+		{"/usr/bin/other", other},
+		{"/usr/bin/*", nil}, // LookUp performs literal, exact-path matching.
 		{"/missing", nil},
 	} {
-		t.Run(tc.pattern, func(t *testing.T) {
-			found, err := q.Search(tc.pattern)
-			require.NoError(t, err)
-			assert.ElementsMatch(t, tc.want, found)
+		t.Run(tc.path, func(t *testing.T) {
+			for range 2 {
+				found, err := q.LookUp(tc.path)
+				require.NoError(t, err)
+				assert.Same(t, tc.want, found)
+			}
 		})
 	}
 
 	writeFixture(t, baseDir, "status", "Package: replacement\nArchitecture: all\n")
+	writeFixture(t, baseDir, "info/replacement.list", "/usr/bin/replacement\n")
 	require.NoError(t, q.Load())
 	list, err = q.List()
 	require.NoError(t, err)
@@ -65,6 +68,13 @@ func TestQueryLoad(t *testing.T) {
 	require.Error(t, err)
 	_, err = q.Get("example:arm64")
 	require.ErrorContains(t, err, "package not found: example:arm64")
+	found, err := q.LookUp("/usr/bin/example")
+	require.NoError(t, err)
+	assert.Nil(t, found, "Load must invalidate ownership from the previous database")
+	found, err = q.LookUp("/usr/bin/replacement")
+	require.NoError(t, err)
+	require.NotNil(t, found)
+	assert.Same(t, list[0], found)
 }
 
 func TestQueryLoadErrors(t *testing.T) {
@@ -82,24 +92,58 @@ func TestQueryEmptyStatus(t *testing.T) {
 	list, err := q.List()
 	require.NoError(t, err)
 	assert.Empty(t, list)
-	found, err := q.Search("/usr/bin/example")
+	found, err := q.LookUp("/usr/bin/example")
 	require.NoError(t, err)
 	assert.Empty(t, found)
 	_, err = q.Get("example")
 	require.ErrorContains(t, err, "package not found: example")
 }
 
-func TestQuerySearchReadError(t *testing.T) {
+func TestQueryLookUpReadError(t *testing.T) {
 	q := &query{baseDir: t.TempDir()}
 	writeFixture(t, q.baseDir, "status", "Package: example\nArchitecture: all\nStatus: install ok installed\n")
 	// A directory at the file path causes a read error other than not-exist.
 	listPath := filepath.Join(q.baseDir, "info/example.list")
 	require.NoError(t, os.MkdirAll(listPath, 0755))
 	require.NoError(t, q.Load())
-	_, err := q.Search("/usr/bin/example")
+	_, err := q.LookUp("/usr/bin/example")
 	var pathErr *os.PathError
 	require.ErrorAs(t, err, &pathErr)
 	assert.Equal(t, listPath, pathErr.Path)
+	_, err = q.LookUp("/usr/bin/example")
+	require.ErrorAs(t, err, &pathErr, "an incomplete index must not hide read errors")
+	require.NoError(t, os.Remove(listPath))
+	writeFixture(t, q.baseDir, "info/example.list", "/usr/bin/example\n")
+	found, err := q.LookUp("/usr/bin/example")
+	require.NoError(t, err)
+	require.NotNil(t, found, "retry building the index after the read error is resolved")
+	assert.Equal(t, "example", found.Name())
+}
+
+func TestQueryLookUpRejectsRelativePaths(t *testing.T) {
+	q := NewQueryWithBaseDir(t.TempDir())
+	for _, path := range []string{"", "usr/bin/example", "./example"} {
+		t.Run(path, func(t *testing.T) {
+			_, err := q.LookUp(path)
+			require.ErrorContains(t, err, "absolute path")
+		})
+	}
+}
+
+func TestQueryLookUpLiteralMetacharacters(t *testing.T) {
+	baseDir := t.TempDir()
+	writeFixture(t, baseDir, "status", "Package: example\nArchitecture: all\n")
+	const path = "/usr/share/example/[data]*?"
+	writeFixture(t, baseDir, "info/example.list", path+"\n")
+	q := NewQueryWithBaseDir(baseDir)
+	require.NoError(t, q.Load())
+	want, err := q.Get("example")
+	require.NoError(t, err)
+	for range 2 {
+		found, err := q.LookUp(path)
+		require.NoError(t, err)
+		assert.Same(t, want, found)
+	}
 }
 
 func TestQueryAliases(t *testing.T) {
@@ -130,11 +174,9 @@ func TestQueryAliases(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, list, 1)
 			assert.Same(t, pkg, list[0])
-			found, err := q.Search("/usr/bin/example")
+			found, err := q.LookUp("/usr/bin/example")
 			require.NoError(t, err)
-			require.Len(t, found, 1)
-			assert.Same(t, pkg, found[0].Package)
-			assert.Equal(t, "/usr/bin/example", found[0].File)
+			assert.Same(t, pkg, found)
 		})
 	}
 }
@@ -156,7 +198,6 @@ func TestQueryMultiarch(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, native, selected.Architecture())
 				var packages []*Package
-				var sharedOwners []*OwnedFile
 				for _, arch := range arches {
 					pkg, err := q.Get("example:" + arch)
 					require.NoError(t, err)
@@ -165,20 +206,17 @@ func TestQueryMultiarch(t *testing.T) {
 						assert.Same(t, selected, pkg)
 					}
 					packages = append(packages, pkg)
-					sharedOwners = append(sharedOwners, &OwnedFile{Package: pkg, File: "/usr/share/example/copyright"})
 					path := "/usr/lib/" + arch + "/libexample.so"
-					found, err := q.Search(path)
+					found, err := q.LookUp(path)
 					require.NoError(t, err)
-					require.Len(t, found, 1)
-					assert.Same(t, pkg, found[0].Package)
-					assert.Equal(t, path, found[0].File)
+					assert.Same(t, pkg, found)
 				}
 				list, err := q.List()
 				require.NoError(t, err)
 				assert.ElementsMatch(t, packages, list)
-				found, err := q.Search("/usr/share/example/copyright")
+				found, err := q.LookUp("/usr/share/example/copyright")
 				require.NoError(t, err)
-				assert.ElementsMatch(t, sharedOwners, found)
+				assert.True(t, found == packages[0] || found == packages[1], "shared files may resolve to either owning package")
 			})
 		}
 	}
@@ -204,20 +242,20 @@ func TestQueryMultiarchFallback(t *testing.T) {
 	}
 }
 
-func TestQuerySearchSkipsMissingLists(t *testing.T) {
+func TestQueryLookUpSkipsMissingLists(t *testing.T) {
 	baseDir := t.TempDir()
 	writeFixture(t, baseDir, "status", "Package: held\nStatus: hold ok not-installed\n\nPackage: missing\nArchitecture: all\nStatus: install ok installed\n\nPackage: example\nArchitecture: all\nStatus: install ok installed\n")
 	// Both uninstalled and installed packages may have no .list file.
 	writeFixture(t, baseDir, "info/example.list", "/usr/bin/example\n")
 	q := NewQueryWithBaseDir(baseDir)
 	require.NoError(t, q.Load())
-	found, err := q.Search("/usr/bin/example")
+	found, err := q.LookUp("/usr/bin/example")
 	require.NoError(t, err)
-	require.Len(t, found, 1)
-	assert.Equal(t, "example", found[0].Package.Name())
+	require.NotNil(t, found)
+	assert.Equal(t, "example", found.Name())
 }
 
-func TestQuerySearchFindsUnconfiguredPackages(t *testing.T) {
+func TestQueryLookUpFindsUnconfiguredPackages(t *testing.T) {
 	for _, status := range []string{"half-installed", "unpacked", "half-configured", "triggers-awaited", "triggers-pending"} {
 		t.Run(status, func(t *testing.T) {
 			baseDir := t.TempDir()
@@ -225,11 +263,11 @@ func TestQuerySearchFindsUnconfiguredPackages(t *testing.T) {
 			writeFixture(t, baseDir, "info/example.list", "/usr/bin/example\n")
 			q := NewQueryWithBaseDir(baseDir)
 			require.NoError(t, q.Load())
-			found, err := q.Search("/usr/bin/example")
+			found, err := q.LookUp("/usr/bin/example")
 			require.NoError(t, err)
-			require.Len(t, found, 1)
-			assert.Equal(t, "example", found[0].Package.Name())
-			assert.Equal(t, status, found[0].Package.Status().Current)
+			require.NotNil(t, found)
+			assert.Equal(t, "example", found.Name())
+			assert.Equal(t, status, found.Status().Current)
 		})
 	}
 }

@@ -11,9 +11,8 @@ import (
 type Query interface {
 	Get(name string) (*Package, error)
 	List() ([]*Package, error)
-	// Note: Search is NOT compatible to dpkg-query -S.
-	Search(pattern string) ([]*OwnedFile, error)
 	Load() error
+	LookUp(file string) (*Package, error)
 }
 
 type query struct {
@@ -22,6 +21,7 @@ type query struct {
 	arch     string
 	packages []*Package
 	nameMap  map[string][]*Package
+	filesMap map[string]*Package
 }
 
 var _ Query = &query{}
@@ -93,27 +93,29 @@ func (d *query) List() ([]*Package, error) {
 	return d.packages, nil
 }
 
-func (q *query) Search(pattern string) ([]*OwnedFile, error) {
+func (q *query) LookUp(searchFile string) (*Package, error) {
+	if !filepath.IsAbs(searchFile) {
+		return nil, fmt.Errorf("pattern must be an absolute path: %s", searchFile)
+	}
+	if q.filesMap != nil {
+		return q.filesMap[searchFile], nil
+	}
 	packages, err := q.List()
 	if err != nil {
 		return nil, err
 	}
-	var ownedFiles []*OwnedFile
+	var filesMap = make(map[string]*Package)
 	for _, pkg := range packages {
 		files, err := pkg.ListFiles()
 		if err != nil {
 			return nil, err
 		}
 		for _, file := range files {
-			if matched, _ := filepath.Match(pattern, file); matched {
-				ownedFiles = append(ownedFiles, &OwnedFile{
-					Package: pkg,
-					File:    file,
-				})
-			}
+			filesMap[file] = pkg
 		}
 	}
-	return ownedFiles, nil
+	q.filesMap = filesMap
+	return filesMap[searchFile], nil
 }
 
 func (d *query) Load() error {
@@ -125,6 +127,7 @@ func (d *query) Load() error {
 	if err != nil {
 		return err
 	}
+	d.filesMap = nil
 	d.packages = pkgs
 	d.nameMap = make(map[string][]*Package)
 	for _, pkg := range pkgs {

@@ -176,7 +176,7 @@ func TestScannerRetriesFailedOwnerLookup(t *testing.T) {
 	writeTestELF(t, path, elf.ET_EXEC, false)
 	failure := errors.New("owner lookup failed")
 	calls := 0
-	d := stubQuery{search: func(got string) ([]*dpkg.OwnedFile, error) {
+	d := stubQuery{lookup: func(got string) (*dpkg.Package, error) {
 		calls++
 		assert.Equal(t, path, got)
 		if calls == 1 {
