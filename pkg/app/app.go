@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/loilo-inc/bistro/pkg/bistro"
+	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/urfave/cli/v3"
 )
 
@@ -25,15 +26,24 @@ var _ App = (*app)(nil)
 func New(version, commit, date string) App {
 	execer := bistro.NewExecer()
 	ldd := bistro.NewLdd(execer)
-	dpkg := bistro.NewDpkg(execer)
+	query := dpkg.NewQuery()
 	logger := bistro.NewLogger(os.Stdout, os.Stderr)
 
 	return &app{
-		DI:      bistro.DI{Dpkg: dpkg, Ldd: ldd, Logger: logger},
+		DI: bistro.DI{
+			Query:  query,
+			Ldd:    ldd,
+			Execer: execer,
+			Logger: logger,
+		},
 		version: version,
 		commit:  commit,
 		date:    date,
 	}
+}
+
+func (c *app) load() error {
+	return c.DI.Query.Load()
 }
 
 func (c *app) command() *cli.Command {
@@ -48,6 +58,9 @@ func (c *app) command() *cli.Command {
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() == 0 {
 						return fmt.Errorf("scan requires at least one file or directory")
+					}
+					if err := c.load(); err != nil {
+						return err
 					}
 					return c.scan(cmd.Args().Slice()...)
 				},
@@ -76,6 +89,9 @@ func (c *app) command() *cli.Command {
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if err := c.load(); err != nil {
+						return err
+					}
 					return c.bundle(bistro.BundleInput{
 						Out:      cmd.String("out"),
 						Files:    cmd.Args().Slice(),
@@ -108,7 +124,7 @@ func (c *app) scan(paths ...string) error {
 		for _, exeDep := range elfDep.Dependencies {
 			pkgName := "<none>"
 			if exeDep.Package != nil {
-				pkgName = exeDep.Package.Package
+				pkgName = exeDep.Package.NameWithArch()
 			}
 			fmt.Printf("  %s => %s\n", exeDep.Library.Path, pkgName)
 		}

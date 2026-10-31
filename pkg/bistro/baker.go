@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/loilo-inc/bistro/pkg/dpkg"
 )
 
 type Baker interface {
@@ -22,7 +24,7 @@ func NewBaker(di DI) Baker {
 
 type BakeInput struct {
 	Out      string
-	DpkgList []*Package
+	DpkgList []*dpkg.Package
 	Files    []string
 }
 
@@ -31,10 +33,10 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 	// Reject collisions before creating an archive that would lose metadata.
 	names := make(map[string]string, len(input.DpkgList))
 	for _, pkg := range input.DpkgList {
-		if previous, ok := names[pkg.Name]; ok {
-			return fmt.Errorf("package metadata name conflict: %s and %s use %s", previous, pkg.Package, pkg.Name)
+		if previous, ok := names[pkg.Name()]; ok {
+			return fmt.Errorf("package metadata name conflict: %s and %s use %s", previous, pkg.NameWithArch(), pkg.Name())
 		}
-		names[pkg.Name] = pkg.Package
+		names[pkg.Name()] = pkg.NameWithArch()
 	}
 	tmpFile, err := os.CreateTemp(filepath.Dir(input.Out), "rootfs")
 	if err != nil {
@@ -73,22 +75,18 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 // directory to store dpkg status used by distroless
 const DpkgStatusDir = "/var/lib/dpkg/status.d"
 
-func (b *baker) writePackageMetadata(rootFS RootFS, pkg *Package) error {
-	status, err := b.Dpkg.PackageStatus(pkg.Package)
+func (b *baker) writePackageMetadata(rootFS RootFS, pkg *dpkg.Package) error {
+	if err := rootFS.Add(filepath.Join(DpkgStatusDir, pkg.Name()), []byte(pkg.String()), 0644); err != nil {
+		return err
+	}
+	md5sums, err := pkg.Md5Sums()
 	if err != nil {
 		return err
 	}
-	if err = rootFS.Add(filepath.Join(DpkgStatusDir, pkg.Name), status, 0644); err != nil {
+	if err = rootFS.Add(filepath.Join(DpkgStatusDir, pkg.Name()+".md5sums"), []byte(md5sums.String()), 0644); err != nil {
 		return err
 	}
-	md5sums, err := b.Dpkg.PackageMd5Sums(pkg.Package)
-	if err != nil {
-		return err
-	}
-	if err = rootFS.Add(filepath.Join(DpkgStatusDir, pkg.Name+".md5sums"), md5sums, 0644); err != nil {
-		return err
-	}
-	files, err := b.Dpkg.ListFiles(pkg.Package)
+	files, err := pkg.ListFiles()
 	if err != nil {
 		return err
 	}

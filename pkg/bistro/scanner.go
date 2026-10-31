@@ -4,6 +4,8 @@ import (
 	"debug/elf"
 	"os"
 	"path/filepath"
+
+	"github.com/loilo-inc/bistro/pkg/dpkg"
 )
 
 type Scanner interface {
@@ -20,7 +22,7 @@ type scanner struct {
 var _ Scanner = &scanner{}
 
 func NewScanner(di DI) Scanner {
-	finder := NewFinder(di.Dpkg, di.Ldd)
+	finder := NewFinder(di)
 	return &scanner{
 		DI:        di,
 		finder:    finder,
@@ -38,7 +40,7 @@ type ElfFile struct {
 type ElfDependency struct {
 	ElfFile *ElfFile
 	// Package that provides the ELF file itself, if available
-	Package      *Package
+	Package      *dpkg.Package
 	Dependencies []*ExeDependency
 	BrokenLibs   []string
 }

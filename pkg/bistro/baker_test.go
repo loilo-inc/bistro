@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,19 +18,22 @@ func TestBakerCreatesArchive(t *testing.T) {
 	owned, explicit := filepath.Join(dir, "owned"), filepath.Join(dir, "explicit")
 	writeRootFSFile(t, owned, "package data", 0640)
 	writeRootFSFile(t, explicit, "binary", 0755)
-	pkg := &Package{Name: "example", Package: "example:arm64", Status: PackageStatusInstalled}
-	d := packageFilesStub(t, []*Package{pkg}, map[string][]string{pkg.Package: {owned}})
+	pkg := testPackage(t, "example:arm64", "", "", dpkg.StatusInstalled)
+	d := packageFilesStub(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {owned}})
 	out := filepath.Join(dir, "rootfs.tar")
 	writeRootFSFile(t, out, "previous archive", 0644)
-	err := NewBaker(DI{Dpkg: d}).CreateRootFS(&BakeInput{Out: out, DpkgList: []*Package{pkg}, Files: []string{explicit, owned, explicit}})
+	err := NewBaker(DI{Query: d}).CreateRootFS(&BakeInput{Out: out, DpkgList: []*dpkg.Package{pkg}, Files: []string{explicit, owned, explicit}})
 	require.NoError(t, err)
 	entries := readBundleTar(t, out)
 	assert.Equal(t, "package data", entries[rootFSArchiveName(owned)].body)
 	assert.Equal(t, int64(0640), entries[rootFSArchiveName(owned)].header.Mode)
 	assert.Equal(t, "binary", entries[rootFSArchiveName(explicit)].body)
 	assert.Equal(t, int64(0755), entries[rootFSArchiveName(explicit)].header.Mode)
-	assert.Equal(t, "Package: example\nStatus: install ok installed\n", entries["var/lib/dpkg/status.d/example"].body)
-	assert.Equal(t, "checksum example:arm64\n", entries["var/lib/dpkg/status.d/example.md5sums"].body)
+	metadata, err := dpkg.ParseStatus(entries["var/lib/dpkg/status.d/example"].body)
+	require.NoError(t, err)
+	require.Len(t, metadata, 1)
+	assert.Equal(t, pkg.String(), metadata[0].String())
+	assert.Equal(t, "d41d8cd98f00b204e9800998ecf8427e  usr/share/example:arm64\n", entries["var/lib/dpkg/status.d/example.md5sums"].body)
 	assert.NotContains(t, entries, "var/lib/dpkg/status.d/example:arm64")
 	assert.NotContains(t, entries, "var/lib/dpkg/status.d/example:arm64.md5sums")
 	leftovers, err := filepath.Glob(filepath.Join(dir, "rootfs[0-9]*"))
@@ -41,12 +45,12 @@ func TestBakerSkipsMissingPackageFiles(t *testing.T) {
 	dir := rootFSTempDir(t)
 	missing, owned := filepath.Join(dir, "missing"), filepath.Join(dir, "owned")
 	writeRootFSFile(t, owned, "package data", 0644)
-	pkg := &Package{Name: "example", Package: "example"}
-	d := packageFilesStub(t, []*Package{pkg}, map[string][]string{pkg.Package: {missing, owned}})
+	pkg := testPackage(t, "example", "", "", "")
+	d := packageFilesStub(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {missing, owned}})
 	var stderr bytes.Buffer
 	out := filepath.Join(dir, "archive.tar")
-	err := NewBaker(DI{Dpkg: d, Logger: NewLogger(io.Discard, &stderr)}).CreateRootFS(&BakeInput{
-		Out: out, DpkgList: []*Package{pkg},
+	err := NewBaker(DI{Query: d, Logger: NewLogger(io.Discard, &stderr)}).CreateRootFS(&BakeInput{
+		Out: out, DpkgList: []*dpkg.Package{pkg},
 	})
 	require.NoError(t, err)
 	entries := readBundleTar(t, out)
@@ -57,7 +61,7 @@ func TestBakerSkipsMissingPackageFiles(t *testing.T) {
 }
 
 func TestBakerFailurePreservesOutputAndRemovesTemporaryFile(t *testing.T) {
-	for _, stage := range []string{"status", "md5sums", "file list", "package file", "explicit file", "rename"} {
+	for _, stage := range []string{"md5sums", "file list", "package file", "explicit file", "rename"} {
 		t.Run(stage, func(t *testing.T) {
 			dir := rootFSTempDir(t)
 			out := filepath.Join(dir, "archive.tar")
@@ -66,29 +70,30 @@ func TestBakerFailurePreservesOutputAndRemovesTemporaryFile(t *testing.T) {
 			} else {
 				writeRootFSFile(t, out, "original", 0644)
 			}
-			failure := errors.New("metadata unavailable")
-			pkg := &Package{Name: "example", Package: "example"}
-			d := packageFilesStub(t, []*Package{pkg}, nil)
-			if stage == "status" {
-				d.status = func(string) ([]byte, error) { return nil, failure }
-			}
-			if stage == "md5sums" {
-				d.md5sums = func(string) ([]byte, error) { return nil, failure }
-			}
-			if stage == "file list" {
-				d.listFiles = func(string) ([]string, error) { return nil, failure }
+			pkg := testPackage(t, "example", "", "", "")
+			d := packageFilesStub(t, []*dpkg.Package{pkg}, nil)
+			if stage == "md5sums" || stage == "file list" {
+				extension := ".md5sums"
+				if stage == "file list" {
+					extension = ".list"
+				}
+				path := filepath.Join(d.baseDir, "info", "example"+extension)
+				require.NoError(t, os.Remove(path))
+				require.NoError(t, os.Mkdir(path, 0755))
 			}
 			if stage == "package file" {
-				d.listFiles = func(string) ([]string, error) { return []string{"relative"}, nil }
+				require.NoError(t, os.WriteFile(filepath.Join(d.baseDir, "info/example.list"), []byte("relative\n"), 0644))
 			}
-			input := &BakeInput{Out: out, DpkgList: []*Package{pkg}}
+			input := &BakeInput{Out: out, DpkgList: []*dpkg.Package{pkg}}
 			if stage == "explicit file" {
 				input.Files = []string{filepath.Join(dir, "missing")}
 			}
-			err := NewBaker(DI{Dpkg: d}).CreateRootFS(input)
+			err := NewBaker(DI{Query: d}).CreateRootFS(input)
 			require.Error(t, err)
-			if stage == "status" || stage == "md5sums" || stage == "file list" {
-				assert.ErrorIs(t, err, failure)
+			if stage == "md5sums" || stage == "file list" {
+				var pathErr *os.PathError
+				require.ErrorAs(t, err, &pathErr)
+				assert.Contains(t, pathErr.Path, d.baseDir)
 			}
 			if stage != "rename" {
 				data, e := os.ReadFile(out)
@@ -115,9 +120,9 @@ func TestBakerRejectsConflictingMetadataNames(t *testing.T) {
 	writeRootFSFile(t, out, "original", 0644)
 	err := NewBaker(DI{}).CreateRootFS(&BakeInput{
 		Out: out,
-		DpkgList: []*Package{
-			{Name: "library", Package: "library:arm64", Architecture: "arm64"},
-			{Name: "library", Package: "library:amd64", Architecture: "amd64"},
+		DpkgList: []*dpkg.Package{
+			testPackage(t, "library:arm64", "", "arm64", ""),
+			testPackage(t, "library:amd64", "", "amd64", ""),
 		},
 	})
 	require.ErrorContains(t, err, "package metadata name conflict: library:arm64 and library:amd64 use library")
@@ -148,8 +153,10 @@ func TestBakerMetadataWriteFailures(t *testing.T) {
 		t.Run(string(rune('0'+failAt)), func(t *testing.T) {
 			failure := errors.New("archive write failed")
 			r := &failingMetadataRoot{failAt: failAt, err: failure}
-			b := NewBaker(DI{Dpkg: packageFilesStub(t, nil, nil)}).(*baker)
-			require.ErrorIs(t, b.writePackageMetadata(r, &Package{Name: "example", Package: "example"}), failure)
+			pkg := testPackage(t, "example", "", "", "")
+			packageFilesStub(t, []*dpkg.Package{pkg}, nil)
+			b := NewBaker(DI{}).(*baker)
+			require.ErrorIs(t, b.writePackageMetadata(r, pkg), failure)
 			assert.Equal(t, failAt, r.calls)
 		})
 	}

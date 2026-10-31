@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,7 +33,7 @@ func TestScannerELFTypes(t *testing.T) {
 			path := filepath.Join(rootFSTempDir(t), "fixture")
 			writeTestELF(t, path, tt.typ, tt.interp, tt.libs...)
 			calls := 0
-			s := NewScanner(DI{Dpkg: unownedFilesDpkg(), Ldd: stubLdd(func(got string) (*LinkInfo, error) {
+			s := NewScanner(DI{Query: unownedFilesQuery(), Ldd: stubLdd(func(got string) (*LinkInfo, error) {
 				calls++
 				assert.Equal(t, path, got)
 				return &LinkInfo{Libs: []*Library{{Name: "missing"}}}, nil
@@ -70,7 +71,7 @@ func TestScannerRecursiveAndRelativePaths(t *testing.T) {
 	writeTestELF(t, filepath.Join(dir, "nested", "object.o"), elf.ET_REL, false)
 	writeRootFSFile(t, filepath.Join(dir, "README"), "plain text", 0644)
 	writeRootFSFile(t, filepath.Join(dir, "empty"), "", 0644)
-	s := NewScanner(DI{Dpkg: unownedFilesDpkg()})
+	s := NewScanner(DI{Query: unownedFilesQuery()})
 	deps, err := s.Scan(dir)
 	require.NoError(t, err)
 	var got []string
@@ -98,7 +99,7 @@ func TestScannerSymlinks(t *testing.T) {
 	require.NoError(t, os.Symlink("nested/program", link))
 	dirlink := filepath.Join(dir, "directory")
 	require.NoError(t, os.Symlink("nested", dirlink))
-	s := NewScanner(DI{Dpkg: unownedFilesDpkg()})
+	s := NewScanner(DI{Query: unownedFilesQuery()})
 	deps, err := s.Scan(link)
 	require.NoError(t, err)
 	require.Len(t, deps, 1)
@@ -115,7 +116,7 @@ func TestScannerSymlinks(t *testing.T) {
 
 func TestScannerFailures(t *testing.T) {
 	dir := rootFSTempDir(t)
-	s := NewScanner(DI{Dpkg: unownedFilesDpkg()}).(*scanner)
+	s := NewScanner(DI{Query: unownedFilesQuery()}).(*scanner)
 	missing := filepath.Join(dir, "missing")
 	_, err := s.Scan(missing)
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -135,7 +136,7 @@ func TestScannerFailures(t *testing.T) {
 	writeTestELF(t, file, elf.ET_DYN, true)
 	failure := errors.New("trace failed")
 	calls := 0
-	s.finder = stubFinder{findPackage: func(string) (*Package, error) { return nil, errPackageNotFound }, trace: func(string) (*ExeTraceResult, error) {
+	s.finder = stubFinder{findPackage: func(string) (*dpkg.Package, error) { return nil, errPackageNotFound }, trace: func(string) (*ExeTraceResult, error) {
 		calls++
 		if calls == 1 {
 			return nil, failure
@@ -149,7 +150,7 @@ func TestScannerFailures(t *testing.T) {
 	require.Len(t, deps, 1)
 	assert.Equal(t, []string{"missing"}, deps[0].BrokenLibs)
 	assert.Equal(t, 2, calls, "failed traces must be retried")
-	s.finder = stubFinder{findPackage: func(string) (*Package, error) { return nil, errPackageNotFound }, trace: func(string) (*ExeTraceResult, error) { return nil, failure }}
+	s.finder = stubFinder{findPackage: func(string) (*dpkg.Package, error) { return nil, errPackageNotFound }, trace: func(string) (*ExeTraceResult, error) { return nil, failure }}
 	s.depsCache = make(map[string]*ElfDependency)
 	_, err = s.Scan(filepath.Dir(file))
 	require.ErrorIs(t, err, failure)
@@ -158,9 +159,9 @@ func TestScannerFailures(t *testing.T) {
 func TestScannerDependencies(t *testing.T) {
 	path := filepath.Join(rootFSTempDir(t), "program")
 	writeTestELF(t, path, elf.ET_EXEC, true)
-	want := []*ExeDependency{{Library: &Library{Name: "libfoo.so", Path: "/lib/libfoo.so"}, Package: &Package{Package: "foo"}}}
-	s := NewScanner(DI{Dpkg: unownedFilesDpkg()}).(*scanner)
-	s.finder = stubFinder{findPackage: func(string) (*Package, error) { return nil, errPackageNotFound }, trace: func(got string) (*ExeTraceResult, error) {
+	want := []*ExeDependency{{Library: &Library{Name: "libfoo.so", Path: "/lib/libfoo.so"}, Package: testPackage(t, "foo", "", "", "")}}
+	s := NewScanner(DI{Query: unownedFilesQuery()}).(*scanner)
+	s.finder = stubFinder{findPackage: func(string) (*dpkg.Package, error) { return nil, errPackageNotFound }, trace: func(got string) (*ExeTraceResult, error) {
 		assert.Equal(t, path, got)
 		return &ExeTraceResult{Dependencies: want}, nil
 	}}
@@ -175,7 +176,7 @@ func TestScannerRetriesFailedOwnerLookup(t *testing.T) {
 	writeTestELF(t, path, elf.ET_EXEC, false)
 	failure := errors.New("owner lookup failed")
 	calls := 0
-	d := stubDpkg{search: func(got string) ([]*OwnedFile, error) {
+	d := stubQuery{search: func(got string) ([]*dpkg.OwnedFile, error) {
 		calls++
 		assert.Equal(t, path, got)
 		if calls == 1 {
@@ -183,7 +184,7 @@ func TestScannerRetriesFailedOwnerLookup(t *testing.T) {
 		}
 		return nil, nil
 	}}
-	s := NewScanner(DI{Dpkg: d})
+	s := NewScanner(DI{Query: d})
 	_, err := s.Scan(path)
 	require.ErrorIs(t, err, failure)
 	for range 2 {
@@ -204,6 +205,6 @@ func TestScannerMalformedDynamicSection(t *testing.T) {
 	// A dynamic entry requires both a tag and value; a one-byte section is invalid.
 	binary.LittleEndian.PutUint64(data[int(sectionOffset)+128+32:], 1)
 	require.NoError(t, os.WriteFile(path, data, 0644))
-	_, err = NewScanner(DI{Dpkg: unownedFilesDpkg()}).Scan(path)
+	_, err = NewScanner(DI{Query: unownedFilesQuery()}).Scan(path)
 	require.ErrorContains(t, err, "dynamic section")
 }

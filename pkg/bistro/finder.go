@@ -4,31 +4,31 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"github.com/loilo-inc/bistro/pkg/dpkg"
 )
 
 type Finder interface {
 	TraceDepsForExecutable(file string) (*ExeTraceResult, error)
-	FindPackageForExecutable(file string) (*Package, error)
+	FindPackageForExecutable(file string) (*dpkg.Package, error)
 }
 
 type finder struct {
-	dpkg        Dpkg
-	ldd         Ldd
+	DI
 	lddCache    map[string]*LinkInfo
-	pkgCache    map[string]*Package
-	searchCache map[string]*Package
+	searchCache map[string]*dpkg.Package
 }
 
 type ExeDependency struct {
 	Library *Library
-	Package *Package
+	Package *dpkg.Package
 }
 
-func NewFinder(dpkg Dpkg, ldd Ldd) Finder {
-	return &finder{dpkg: dpkg, ldd: ldd,
+func NewFinder(di DI) Finder {
+	return &finder{
+		DI:          di,
 		lddCache:    map[string]*LinkInfo{},
-		pkgCache:    map[string]*Package{},
-		searchCache: map[string]*Package{},
+		searchCache: map[string]*dpkg.Package{},
 	}
 }
 
@@ -72,7 +72,7 @@ func (b *finder) TraceDepsForExecutable(file string) (*ExeTraceResult, error) {
 	return &result, nil
 }
 
-func (b *finder) FindPackageForExecutable(file string) (*Package, error) {
+func (b *finder) FindPackageForExecutable(file string) (*dpkg.Package, error) {
 	if !filepath.IsAbs(file) {
 		return nil, errors.New("file path is not absolute: " + file)
 	}
@@ -87,7 +87,7 @@ func (f *finder) listLibs(file string) (*LinkInfo, error) {
 	if cache, ok := f.lddCache[file]; ok {
 		return cache, nil
 	}
-	info, err := f.ldd.ListObjects(file)
+	info, err := f.DI.Ldd.ListObjects(file)
 	if err != nil {
 		return nil, err
 	}
@@ -97,38 +97,19 @@ func (f *finder) listLibs(file string) (*LinkInfo, error) {
 
 var errPackageNotFound = errors.New("package not found")
 
-func (f *finder) searchPackage(file string) (*Package, error) {
+func (f *finder) searchPackage(file string) (*dpkg.Package, error) {
 	if cache, ok := f.searchCache[file]; ok {
 		return cache, nil
 	}
-	result, err := f.dpkg.Search(file)
+	result, err := f.DI.Query.Search(file)
 	if err != nil {
 		return nil, err
 	}
 	if len(result) == 0 {
 		return nil, errPackageNotFound
 	}
-	pkg, err := f.getPackage(result[0].Package)
-	if err != nil {
-		return nil, err
-	}
-	f.searchCache[file] = pkg
-	return pkg, nil
-}
-
-func (f *finder) getPackage(packageName string) (*Package, error) {
-	if cache, ok := f.pkgCache[packageName]; ok {
-		return cache, nil
-	}
-	pkgs, err := f.dpkg.ListPackages(packageName)
-	if err != nil {
-		return nil, err
-	}
-	if len(pkgs) == 0 {
-		return nil, errors.New("package not found: " + packageName)
-	}
-	f.pkgCache[packageName] = pkgs[0]
-	return pkgs[0], nil
+	f.searchCache[file] = result[0].Package
+	return result[0].Package, nil
 }
 
 func realpath(file string) (string, error) {

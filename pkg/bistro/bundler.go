@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/loilo-inc/bistro/pkg/dpkg"
 )
 
 type BundleInput struct {
@@ -22,7 +24,7 @@ type Bundler interface {
 type bundler struct {
 	DI
 	scanner         Scanner
-	packages        []*Package
+	packages        []*dpkg.Package
 	files           []string
 	missingPackages []string
 	brokenDeps      []*ElfDependency
@@ -70,14 +72,12 @@ func (b *bundler) Bundle(input BundleInput) error {
 		// Ignore dependent files from scans, as they will be copied
 	}
 
-	if len(input.Packages) > 0 {
-		pkgs, err := b.DI.Dpkg.ListPackages(input.Packages...)
+	for _, packageName := range input.Packages {
+		pkg, err := b.DI.Query.Get(packageName)
 		if err != nil {
 			return err
 		}
-		for _, pkg := range pkgs {
-			b.addPackage(pkg)
-		}
+		b.addPackage(pkg)
 	}
 
 	for _, copy := range input.Copies {
@@ -148,13 +148,13 @@ func (b *bundler) addDependency(deps ...*ElfDependency) {
 	}
 }
 
-func (b *bundler) addPackage(target ...*Package) {
+func (b *bundler) addPackage(target ...*dpkg.Package) {
 	for _, t := range target {
-		if _, ok := b.visitedPackages[t.Package]; !ok {
-			b.visitedPackages[t.Package] = struct{}{}
+		if _, ok := b.visitedPackages[t.NameWithArch()]; !ok {
+			b.visitedPackages[t.NameWithArch()] = struct{}{}
 			b.packages = append(b.packages, t)
-			if t.Status != PackageStatusInstalled {
-				b.missingPackages = append(b.missingPackages, t.Package)
+			if t.Status().Current != dpkg.StatusInstalled {
+				b.missingPackages = append(b.missingPackages, t.NameWithArch())
 			}
 		}
 	}
