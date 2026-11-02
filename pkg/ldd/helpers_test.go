@@ -28,6 +28,13 @@ func needed(names ...string) []dynamicString {
 // are needed, and the dynamic string table preserves empty RUNPATH tags.
 func writeELF(t *testing.T, path string, entries ...dynamicString) {
 	t.Helper()
+	writeELFWithHeader(t, path, nil, entries...)
+}
+
+// writeELFWithHeader lets a fixture override header fields that keep the
+// 64-bit little-endian layout, such as the machine, type, or OS ABI.
+func writeELFWithHeader(t *testing.T, path string, mutate func(*elf.Header64), entries ...dynamicString) {
+	t.Helper()
 	strings := []byte{0}
 	var dynamic bytes.Buffer
 	for _, entry := range entries {
@@ -38,6 +45,9 @@ func writeELF(t *testing.T, path string, entries ...dynamicString) {
 	require.NoError(t, binary.Write(&dynamic, binary.LittleEndian, elf.Dyn64{}))
 	header := elf.Header64{Type: uint16(elf.ET_DYN), Machine: uint16(elf.EM_X86_64), Version: 1, Ehsize: 64, Shoff: uint64(64 + len(strings) + dynamic.Len()), Shentsize: 64, Shnum: 3}
 	copy(header.Ident[:], []byte{0x7f, 'E', 'L', 'F', 2, 1, 1})
+	if mutate != nil {
+		mutate(&header)
+	}
 	var out bytes.Buffer
 	require.NoError(t, binary.Write(&out, binary.LittleEndian, header))
 	out.Write(strings)
@@ -84,5 +94,10 @@ func testResolver(t *testing.T, options ResolverOptions, records ...cacheRecord)
 	require.NoError(t, os.WriteFile(path, cacheFixture(records...), 0644))
 	r := NewResolver(options)
 	require.NoError(t, r.ldSoCache.load(path))
+	return r
+}
+
+func withSysLibraryPaths(r *resolver, paths ...string) *resolver {
+	r.sysLibraryPaths = paths
 	return r
 }

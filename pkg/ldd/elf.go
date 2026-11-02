@@ -2,14 +2,15 @@ package ldd
 
 import (
 	"debug/elf"
+	"fmt"
 	"path/filepath"
 	"regexp"
 )
 
 type elfInfo struct {
+	elf.FileHeader
 	*elfPath
 	Path   string
-	ABI    ABI
 	SONAME string
 	Needed []string
 }
@@ -20,12 +21,10 @@ func readElf(path string, LIB string, PLATFORM string) (*elfInfo, error) {
 		return nil, err
 	}
 	defer file.Close()
+	return newElf(file, path, LIB, PLATFORM)
+}
 
-	abi, err := cacheFlags(file)
-	if err != nil {
-		return nil, err
-	}
-
+func newElf(file *elf.File, path string, LIB string, PLATFORM string) (*elfInfo, error) {
 	dtNeeded, err := file.DynString(elf.DT_NEEDED)
 	if err != nil {
 		return nil, err
@@ -45,11 +44,11 @@ func readElf(path string, LIB string, PLATFORM string) (*elfInfo, error) {
 		return nil, err
 	}
 	return &elfInfo{
-		elfPath: elfPath,
-		Path:    path,
-		ABI:     abi,
-		SONAME:  soname,
-		Needed:  dtNeeded,
+		elfPath:    elfPath,
+		Path:       path,
+		SONAME:     soname,
+		Needed:     dtNeeded,
+		FileHeader: file.FileHeader,
 	}, nil
 }
 
@@ -108,4 +107,42 @@ func expandVars(path string, origin string, lib string, platform string) string 
 	path = libPat.ReplaceAllLiteralString(path, lib)
 	path = platformPat.ReplaceAllLiteralString(path, platform)
 	return path
+}
+
+func (e *elfInfo) verify(target *elfInfo) (bool, error) {
+	// continue if other ELF has a different architecture
+	if e.Class != target.Class || e.Machine != target.Machine {
+		return false, nil
+	}
+	// abort if target ELF is not DYN or EXEC
+	if target.Type != elf.ET_DYN && target.Type != elf.ET_EXEC {
+		return false, fmt.Errorf("[ldd/verify] invalid ELF type for target: %s", target.Path)
+	}
+	// check for ELF header compatibility
+	isValidABI := target.OSABI == elf.ELFOSABI_NONE || target.OSABI == elf.ELFOSABI_LINUX
+	if e.Data != target.Data || e.Version != target.Version || !isValidABI {
+		return false, fmt.Errorf("[ldd/verify] incompatible ELF headers for target: %s", target.Path)
+	}
+	return true, nil
+}
+
+type cacheABI int32
+
+const (
+	kABIFlagArm64_Glibc6  cacheABI = 0x0a00 | 0x0003
+	kABIFlagX86_64_Glibc6 cacheABI = 0x0300 | 0x0003
+)
+
+func (e *elfInfo) ldCacheABI() cacheABI {
+	if e.Class != elf.ELFCLASS64 || e.Data != elf.ELFDATA2LSB {
+		return 0
+	}
+	switch e.Machine {
+	case elf.EM_AARCH64:
+		return kABIFlagArm64_Glibc6
+	case elf.EM_X86_64:
+		return kABIFlagX86_64_Glibc6
+	default:
+		return 0
+	}
 }

@@ -3,6 +3,7 @@ package dpkg
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -126,7 +127,16 @@ func TestPackageInfoReadErrors(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(baseDir, "info/example.list"), 0755))
 	require.NoError(t, os.MkdirAll(filepath.Join(baseDir, "info/example.md5sums"), 0755))
 	_, err := p.ListFiles()
-	require.Error(t, err)
+	requireReadDirError(t, err, filepath.Join(baseDir, "info/example.list"))
 	_, err = p.Md5Sums()
-	require.Error(t, err)
+	requireReadDirError(t, err, filepath.Join(baseDir, "info/example.md5sums"))
+}
+
+func requireReadDirError(t *testing.T, err error, path string) {
+	t.Helper()
+	var pathErr *os.PathError
+	require.ErrorAs(t, err, &pathErr)
+	assert.Equal(t, "read", pathErr.Op)
+	assert.Equal(t, path, pathErr.Path)
+	assert.ErrorIs(t, err, syscall.EISDIR)
 }

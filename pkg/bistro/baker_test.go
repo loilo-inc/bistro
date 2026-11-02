@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
@@ -89,11 +90,31 @@ func TestBakerFailurePreservesOutputAndRemovesTemporaryFile(t *testing.T) {
 				input.Files = []string{filepath.Join(dir, "missing")}
 			}
 			err := NewBaker(DI{Query: d}).CreateRootFS(input)
-			require.Error(t, err)
-			if stage == "md5sums" || stage == "file list" {
+			switch stage {
+			case "md5sums", "file list":
+				extension := ".md5sums"
+				if stage == "file list" {
+					extension = ".list"
+				}
 				var pathErr *os.PathError
 				require.ErrorAs(t, err, &pathErr)
-				assert.Contains(t, pathErr.Path, d.baseDir)
+				assert.Equal(t, "read", pathErr.Op)
+				assert.Equal(t, filepath.Join(d.baseDir, "info", "example"+extension), pathErr.Path)
+				assert.ErrorIs(t, err, syscall.EISDIR)
+			case "package file":
+				require.EqualError(t, err, "path must be absolute")
+			case "explicit file":
+				var pathErr *os.PathError
+				require.ErrorAs(t, err, &pathErr)
+				assert.Equal(t, "lstat", pathErr.Op)
+				assert.Equal(t, filepath.Join(dir, "missing"), pathErr.Path)
+				assert.ErrorIs(t, err, os.ErrNotExist)
+			case "rename":
+				// The errno for renaming a file over a directory differs by OS.
+				var linkErr *os.LinkError
+				require.ErrorAs(t, err, &linkErr)
+				assert.Equal(t, "rename", linkErr.Op)
+				assert.Equal(t, out, linkErr.New)
 			}
 			if stage != "rename" {
 				data, e := os.ReadFile(out)

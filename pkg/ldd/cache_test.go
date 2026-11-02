@@ -1,8 +1,10 @@
 package ldd
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -19,14 +21,14 @@ func TestCacheResolveLibrary(t *testing.T) {
 	).ldSoCache
 	for _, tt := range []struct {
 		name string
-		abi  ABI
+		abi  cacheABI
 		want string
 	}{
-		{"libfoo.so", kABIArm64_Glibc6, "/arm/libfoo.so"},
-		{"libfoo.so", kABIX86_64_Glibc6, "/amd/libfoo.so"},
-		{"arm-only.so", kABIX86_64_Glibc6, ""},
-		{"wrong-type.so", kABIX86_64_Glibc6, ""},
-		{"missing.so", kABIX86_64_Glibc6, ""},
+		{"libfoo.so", kABIFlagArm64_Glibc6, "/arm/libfoo.so"},
+		{"libfoo.so", kABIFlagX86_64_Glibc6, "/amd/libfoo.so"},
+		{"arm-only.so", kABIFlagX86_64_Glibc6, ""},
+		{"wrong-type.so", kABIFlagX86_64_Glibc6, ""},
+		{"missing.so", kABIFlagX86_64_Glibc6, ""},
 	} {
 		// Repeat requests to cover both hits and misses after memoization.
 		for range 2 {
@@ -63,12 +65,17 @@ func TestCacheLoadFailures(t *testing.T) {
 	var cache LdCache
 	path := filepath.Join(t.TempDir(), "cache")
 	require.NoError(t, cache.load(path))
-	resolved, ok := cache.ResolveLibrary("missing.so", kABIX86_64_Glibc6)
+	resolved, ok := cache.ResolveLibrary("missing.so", kABIFlagX86_64_Glibc6)
 	require.Empty(t, resolved)
 	require.False(t, ok)
 	require.NoError(t, os.WriteFile(path, []byte("invalid"), 0644))
-	require.Error(t, cache.load(path))
-	require.Error(t, cache.load(t.TempDir()))
+	require.ErrorIs(t, cache.load(path), io.ErrUnexpectedEOF)
+	dir := t.TempDir()
+	err := cache.load(dir)
+	var pathErr *os.PathError
+	require.ErrorAs(t, err, &pathErr)
+	require.Equal(t, dir, pathErr.Path)
+	require.ErrorIs(t, err, syscall.EISDIR)
 }
 
 func TestParseLdSoCache(t *testing.T) {
@@ -90,7 +97,7 @@ func TestCacheReload(t *testing.T) {
 	for _, libPath := range []string{"/first/libfoo.so", "/second/libfoo.so"} {
 		require.NoError(t, os.WriteFile(path, cacheFixture(cacheRecord{"libfoo.so", libPath, 0x303}), 0644))
 		require.NoError(t, cache.load(path))
-		resolved, ok := cache.ResolveLibrary("libfoo.so", kABIX86_64_Glibc6)
+		resolved, ok := cache.ResolveLibrary("libfoo.so", kABIFlagX86_64_Glibc6)
 		require.True(t, ok)
 		require.Equal(t, libPath, resolved)
 		require.Len(t, cache.keyMap.Get("libfoo.so"), 1)

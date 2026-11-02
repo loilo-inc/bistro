@@ -65,7 +65,7 @@ func TestQueryLoad(t *testing.T) {
 	require.Len(t, list, 1)
 	assert.Equal(t, "replacement", list[0].Name())
 	_, err = q.Get("example")
-	require.Error(t, err)
+	require.EqualError(t, err, "package not found: example")
 	_, err = q.Get("example:arm64")
 	require.ErrorContains(t, err, "package not found: example:arm64")
 	found, err := q.LookUp("/usr/bin/example")

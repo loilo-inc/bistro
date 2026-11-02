@@ -230,7 +230,7 @@ func TestRootFSSymlinks(t *testing.T) {
 
 func TestRootFSRejectsInvalidPaths(t *testing.T) {
 	root := NewRootFS(io.Discard)
-	assert.Error(t, root.Copy("relative/file"))
+	assert.EqualError(t, root.Copy("relative/file"), "path must be absolute")
 	assert.ErrorIs(t, root.Copy(filepath.Join(rootFSTempDir(t), "missing")), os.ErrNotExist)
 	require.NoError(t, root.Close())
 }

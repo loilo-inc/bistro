@@ -35,23 +35,23 @@ type LdCache struct {
 	resolved util.Map[string, string]
 }
 
-func (l *LdCache) ResolveLibrary(libName string, abi ABI) (string, bool) {
-	abiKey := fmt.Sprintf("%s:%x", libName, abi)
+func (l *LdCache) ResolveLibrary(libName string, abiFlag cacheABI) (string, bool) {
+	abiKey := fmt.Sprintf("%s:%x", libName, abiFlag)
 	if path, ok := l.resolved.LookUp(abiKey); ok {
 		return path, path != ""
 	}
-	path := l.doResolve(libName, abi)
+	path := l.doResolve(libName, abiFlag)
 	l.resolved.Set(abiKey, path)
 	return path, path != ""
 }
 
-func (l *LdCache) doResolve(libName string, abi ABI) string {
+func (l *LdCache) doResolve(libName string, abiFlag cacheABI) string {
 	candidates, ok := l.keyMap.LookUp(libName)
 	if !ok {
 		return ""
 	}
 	for _, entry := range candidates {
-		if entry.Flags == int32(abi) {
+		if entry.Flags == int32(abiFlag) {
 			return l.readString(entry.Value)
 		}
 	}

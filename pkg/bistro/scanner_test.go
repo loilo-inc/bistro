@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
@@ -112,7 +113,11 @@ func TestScannerSymlinks(t *testing.T) {
 	cycle := filepath.Join(dir, "cycle")
 	require.NoError(t, os.Symlink("cycle", cycle))
 	_, err = s.Scan(cycle)
-	require.Error(t, err)
+	var pathErr *os.PathError
+	require.ErrorAs(t, err, &pathErr)
+	assert.Equal(t, "stat", pathErr.Op)
+	assert.Equal(t, "cycle", filepath.Base(pathErr.Path))
+	assert.ErrorIs(t, err, syscall.ELOOP)
 }
 
 func TestScannerFailures(t *testing.T) {
