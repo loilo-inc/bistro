@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ type RootFS interface {
 type rootFS struct {
 	copied    map[string]struct{}
 	resolving map[resolvingState]struct{}
+	spFilePat *regexp.Regexp
 	tw        *tar.Writer
 }
 
@@ -39,6 +41,7 @@ func NewRootFS(out io.Writer) RootFS {
 		tw:        tar.NewWriter(out),
 		copied:    make(map[string]struct{}),
 		resolving: make(map[resolvingState]struct{}),
+		spFilePat: regexp.MustCompile(`^/(proc|sys)(/|$)`),
 	}
 }
 
@@ -121,7 +124,10 @@ func (r *rootFS) copyLink(path string, link string, remaining string) error {
 		target = filepath.Join(filepath.Dir(path), target)
 	}
 	target = filepath.Clean(target)
-
+	// terminate early for special file prefixes like /proc and /sys
+	if r.spFilePat.MatchString(target) {
+		return nil
+	}
 	return r.Copy(filepath.Join(target, remaining))
 }
 
