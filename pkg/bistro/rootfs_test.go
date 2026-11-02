@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -226,6 +227,62 @@ func TestRootFSSymlinks(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRootFSSpecialFilePattern(t *testing.T) {
+	pat := NewRootFS(io.Discard).(*rootFS).spFilePat
+	for _, name := range []string{"/proc", "/proc/self/fd/1", "/sys", "/sys/class/net"} {
+		assert.True(t, pat.MatchString(name), name)
+	}
+	for _, name := range []string{"/", "/processes", "/system", "/sysroot/lib", "/usr/proc", "/dev/pts/0"} {
+		assert.False(t, pat.MatchString(name), name)
+	}
+}
+
+func TestRootFSStopsAtSpecialFileSymlinks(t *testing.T) {
+	dir := rootFSTempDir(t)
+	// /proc/self/fd/1 may point to a non-path target such as "pipe:[1]".
+	special := filepath.Join(dir, "proc", "self", "fd", "1")
+	require.NoError(t, os.MkdirAll(filepath.Dir(special), 0755))
+	require.NoError(t, os.Symlink("pipe:[1]", special))
+	// A sibling sharing the prefix must still be followed.
+	file := filepath.Join(dir, "processes", "file")
+	writeRootFSFile(t, file, "not special", 0644)
+	links := map[string]string{
+		filepath.Join(dir, "dev", "stdout"): special,
+		filepath.Join(dir, "dev", "stderr"): filepath.Join("..", "proc", "self", "fd", "2"),
+		filepath.Join(dir, "dev", "procs"):  filepath.Join("..", "processes"),
+	}
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "dev"), 0755))
+	for name, target := range links {
+		require.NoError(t, os.Symlink(target, name))
+	}
+
+	var out bytes.Buffer
+	root := NewRootFS(&out).(*rootFS)
+	root.spFilePat = regexp.MustCompile("^" + regexp.QuoteMeta(dir) + `/(proc|sys)(/|$)`)
+	for _, name := range []string{
+		filepath.Join(dir, "dev", "stdout"),
+		filepath.Join(dir, "dev", "stderr"),
+		filepath.Join(dir, "dev", "procs", "file"),
+	} {
+		require.NoError(t, root.Copy(name))
+	}
+	require.NoError(t, root.Close())
+
+	entries := readRootFSTar(t, out.Bytes())
+	for name, target := range links {
+		require.Contains(t, entries, rootFSArchiveName(name))
+		got := entries[rootFSArchiveName(name)]
+		assert.Equal(t, byte(tar.TypeSymlink), got.header.Typeflag, name)
+		assert.Equal(t, target, got.header.Linkname, name)
+	}
+	procPrefix := rootFSArchiveName(filepath.Join(dir, "proc"))
+	for name := range entries {
+		assert.False(t, name == procPrefix || strings.HasPrefix(name, procPrefix+"/"), "entry under special path: %s", name)
+	}
+	require.Contains(t, entries, rootFSArchiveName(file))
+	assert.Equal(t, "not special", entries[rootFSArchiveName(file)].body)
 }
 
 func TestRootFSRejectsInvalidPaths(t *testing.T) {
