@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/loilo-inc/bistro/pkg/internal/elftest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,12 +15,12 @@ func TestResolverBreadthFirst(t *testing.T) {
 	dir := t.TempDir()
 	a, b, c := filepath.Join(dir, "a"), filepath.Join(dir, "b"), filepath.Join(dir, "c")
 	root := filepath.Join(dir, "app")
-	writeELF(t, root, append(needed("A.so", "B.so"), dynamicString{elf.DT_RUNPATH, a})...)
-	writeELF(t, filepath.Join(a, "A.so"), dynamicString{elf.DT_NEEDED, "C.so"}, dynamicString{elf.DT_RUNPATH, a})
-	writeELF(t, filepath.Join(a, "B.so"), dynamicString{elf.DT_NEEDED, "leaf.so"}, dynamicString{elf.DT_RUNPATH, b})
-	writeELF(t, filepath.Join(a, "C.so"), dynamicString{elf.DT_NEEDED, "leaf.so"}, dynamicString{elf.DT_RUNPATH, c})
-	writeELF(t, filepath.Join(b, "leaf.so"))
-	writeELF(t, filepath.Join(c, "leaf.so"))
+	elftest.WriteDynamic(t, root, append(elftest.Needed("A.so", "B.so"), elftest.DynString(elf.DT_RUNPATH, a))...)
+	elftest.WriteDynamic(t, filepath.Join(a, "A.so"), elftest.DynString(elf.DT_NEEDED, "C.so"), elftest.DynString(elf.DT_RUNPATH, a))
+	elftest.WriteDynamic(t, filepath.Join(a, "B.so"), elftest.DynString(elf.DT_NEEDED, "leaf.so"), elftest.DynString(elf.DT_RUNPATH, b))
+	elftest.WriteDynamic(t, filepath.Join(a, "C.so"), elftest.DynString(elf.DT_NEEDED, "leaf.so"), elftest.DynString(elf.DT_RUNPATH, c))
+	elftest.WriteDynamic(t, filepath.Join(b, "leaf.so"))
+	elftest.WriteDynamic(t, filepath.Join(c, "leaf.so"))
 	libs, err := testResolver(t, ResolverOptions{}).ListObjects(root)
 	require.NoError(t, err)
 	require.Len(t, libs, 2)
@@ -34,9 +35,9 @@ func TestResolverBreadthFirst(t *testing.T) {
 func TestResolverCycle(t *testing.T) {
 	dir := t.TempDir()
 	root := filepath.Join(dir, "app")
-	writeELF(t, root, dynamicString{elf.DT_NEEDED, "A.so"}, dynamicString{elf.DT_RUNPATH, dir})
-	writeELF(t, filepath.Join(dir, "A.so"), dynamicString{elf.DT_NEEDED, "B.so"}, dynamicString{elf.DT_RUNPATH, dir})
-	writeELF(t, filepath.Join(dir, "B.so"), dynamicString{elf.DT_NEEDED, "A.so"}, dynamicString{elf.DT_RUNPATH, dir})
+	elftest.WriteDynamic(t, root, elftest.DynString(elf.DT_NEEDED, "A.so"), elftest.DynString(elf.DT_RUNPATH, dir))
+	elftest.WriteDynamic(t, filepath.Join(dir, "A.so"), elftest.DynString(elf.DT_NEEDED, "B.so"), elftest.DynString(elf.DT_RUNPATH, dir))
+	elftest.WriteDynamic(t, filepath.Join(dir, "B.so"), elftest.DynString(elf.DT_NEEDED, "A.so"), elftest.DynString(elf.DT_RUNPATH, dir))
 	libs, err := testResolver(t, ResolverOptions{}).ListObjects(root)
 	require.NoError(t, err)
 	require.Len(t, libs, 1)
@@ -48,13 +49,13 @@ func TestResolverCycle(t *testing.T) {
 func TestResolverRootIsolation(t *testing.T) {
 	dir := t.TempDir()
 	common := filepath.Join(dir, "common")
-	writeELF(t, filepath.Join(common, "mid.so"), needed("leaf.so")...)
+	elftest.WriteDynamic(t, filepath.Join(common, "mid.so"), elftest.Needed("leaf.so")...)
 	r := withSysLibraryPaths(testResolver(t, ResolverOptions{}), common)
 	for _, name := range []string{"a", "b", "a"} {
 		root := filepath.Join(dir, name, "app")
 		leaf := filepath.Join(dir, name, "leaf.so")
-		writeELF(t, root, dynamicString{elf.DT_NEEDED, "mid.so"}, dynamicString{elf.DT_RPATH, "$ORIGIN"})
-		writeELF(t, leaf)
+		elftest.WriteDynamic(t, root, elftest.DynString(elf.DT_NEEDED, "mid.so"), elftest.DynString(elf.DT_RPATH, "$ORIGIN"))
+		elftest.WriteDynamic(t, leaf)
 		libs, err := r.ListObjects(root)
 		require.NoError(t, err)
 		require.Len(t, libs, 1)
@@ -69,12 +70,12 @@ func TestResolverErrorsAndNoDependencies(t *testing.T) {
 	root := filepath.Join(dir, "app")
 	_, err := r.ListObjects(root)
 	require.ErrorIs(t, err, os.ErrNotExist)
-	require.NoError(t, os.WriteFile(root, []byte("not ELF"), 0644))
+	elftest.WriteNotELF(t, root)
 	_, err = r.ListObjects(root)
 	require.ErrorContains(t, err, "[ldd/readElf] malformed ELF file: "+root+": ")
 	var formatErr *elf.FormatError
 	require.ErrorAs(t, err, &formatErr)
-	writeELF(t, root)
+	elftest.WriteDynamic(t, root)
 	libs, err := r.ListObjects(root)
 	require.NoError(t, err)
 	require.Empty(t, libs)
@@ -102,10 +103,10 @@ func TestDefaultResolver(t *testing.T) {
 func TestResolverLibraryPathVariables(t *testing.T) {
 	dir := t.TempDir()
 	mid := filepath.Join(dir, "plugins", "mid.so")
-	writeELF(t, mid, needed("leaf.so")...)
+	elftest.WriteDynamic(t, mid, elftest.Needed("leaf.so")...)
 	// A decoy alongside the shared library catches expansion against the
 	// importing library instead of the root executable.
-	writeELF(t, filepath.Join(filepath.Dir(mid), "libs", "x86_64", "leaf.so"))
+	elftest.WriteDynamic(t, filepath.Join(filepath.Dir(mid), "libs", "x86_64", "leaf.so"))
 	r := testResolver(t, ResolverOptions{
 		LdLibraryPath: "$ORIGIN/${LIB}/$PLATFORM",
 		DstLib:        "libs", DstPlatform: "x86_64",
@@ -114,8 +115,8 @@ func TestResolverLibraryPathVariables(t *testing.T) {
 		rootDir := filepath.Join(dir, name)
 		root := filepath.Join(rootDir, "app")
 		leaf := filepath.Join(rootDir, "libs", "x86_64", "leaf.so")
-		writeELF(t, root, needed(mid)...)
-		writeELF(t, leaf)
+		elftest.WriteDynamic(t, root, elftest.Needed(mid)...)
+		elftest.WriteDynamic(t, leaf)
 		libs, err := r.ListObjects(root)
 		require.NoError(t, err)
 		require.Len(t, libs, 1)

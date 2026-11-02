@@ -2,9 +2,12 @@ package ldd
 
 import (
 	"debug/elf"
+	"fmt"
+	"math"
 	"path/filepath"
 	"testing"
 
+	"github.com/loilo-inc/bistro/pkg/internal/elftest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,8 +34,8 @@ func TestReadElf(t *testing.T) {
 	for _, runpath := range []string{"$ORIGIN/run", ""} {
 		t.Run("RUNPATH="+runpath, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "libfoo.so")
-			entries := append(needed("libone.so", "libtwo.so"), dynamicString{elf.DT_SONAME, "libfoo.so"}, dynamicString{elf.DT_RPATH, "$PLATFORM/ignored"}, dynamicString{elf.DT_RUNPATH, runpath})
-			writeELF(t, path, entries...)
+			entries := append(elftest.Needed("libone.so", "libtwo.so"), elftest.DynString(elf.DT_SONAME, "libfoo.so"), elftest.DynString(elf.DT_RPATH, "$PLATFORM/ignored"), elftest.DynString(elf.DT_RUNPATH, runpath))
+			elftest.WriteDynamic(t, path, entries...)
 			info, err := readElf(path, "lib", "")
 			require.NoError(t, err)
 			require.Equal(t, path, info.Path)
@@ -49,7 +52,7 @@ func TestReadElf(t *testing.T) {
 		})
 	}
 	path := filepath.Join(t.TempDir(), "plain.so")
-	writeELF(t, path, dynamicString{elf.DT_RPATH, "$ORIGIN"})
+	elftest.WriteDynamic(t, path, elftest.DynString(elf.DT_RPATH, "$ORIGIN"))
 	info, err := readElf(path, "lib", "")
 	require.NoError(t, err)
 	require.Empty(t, info.SONAME)
@@ -118,4 +121,110 @@ func TestElfInfoVerify(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReadElfWithoutSectionHeaders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "libfoo.so")
+	noSections := func(h *elf.Header64) { h.Shoff, h.Shnum, h.Shentsize = 0, 0, 0 }
+	elftest.Write(t, path, elftest.Fixture{Header: noSections, Entries: []elftest.Dyn{
+		elftest.DynString(elf.DT_NEEDED, "libone.so"),
+		elftest.DynString(elf.DT_SONAME, "libfoo.so"),
+		elftest.DynString(elf.DT_RPATH, "/rpath"),
+		elftest.DynString(elf.DT_NEEDED, "libtwo.so"),
+	}})
+	info, err := readElf(path, "lib", "")
+	require.NoError(t, err)
+	require.Equal(t, []string{"libone.so", "libtwo.so"}, info.Needed)
+	require.Equal(t, "libfoo.so", info.SONAME)
+	require.Equal(t, []string{"/rpath"}, info.RPaths)
+
+	elftest.Write(t, path, elftest.Fixture{Header: noSections, Entries: []elftest.Dyn{
+		elftest.DynString(elf.DT_RUNPATH, "/runpath"),
+	}})
+	info, err = readElf(path, "lib", "")
+	require.NoError(t, err)
+	require.True(t, info.HasRunPath)
+	require.Equal(t, []string{"/runpath"}, info.RunPaths)
+}
+
+func TestReadElfIgnoresSectionHeaders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "libfoo.so")
+	elftest.Write(t, path, elftest.Fixture{
+		Entries: elftest.Needed("libone.so"),
+		// Shrink SHT_DYNAMIC below one entry; section-based readers fail on it.
+		Sections: func(s []elf.Section64) { s[2].Size = 1 },
+	})
+	info, err := readElf(path, "lib", "")
+	require.NoError(t, err)
+	require.Equal(t, []string{"libone.so"}, info.Needed)
+}
+
+func TestReadElfWithoutDynamicSegment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "static")
+	// Section headers still describe DT_NEEDED; only program headers count.
+	elftest.Write(t, path, elftest.Fixture{
+		Header:  func(h *elf.Header64) { h.Phoff, h.Phnum = 0, 0 },
+		Entries: elftest.Needed("libone.so"),
+	})
+	info, err := readElf(path, "lib", "")
+	require.NoError(t, err)
+	require.Empty(t, info.Needed, "a file without PT_DYNAMIC has no dynamic dependencies")
+	require.Empty(t, info.SONAME)
+}
+
+func TestReadElfMalformedDynamicSegment(t *testing.T) {
+	// Strings start right after the ELF header and two program headers.
+	const strtab = 64 + 2*56
+	for _, tt := range []struct {
+		name string
+		fx   elftest.Fixture
+		want string
+	}{
+		// Section headers follow the dynamic table, so extend well past the end of file.
+		{"truncated PT_DYNAMIC", elftest.Fixture{Progs: func(p []elf.Prog64) { elftest.Prog(p, elf.PT_DYNAMIC).Filesz += 1 << 20 }},
+			"[ldd/readDynTable] truncated PT_DYNAMIC"},
+		{"string table outside PT_LOAD", elftest.Fixture{Extra: []elf.Dyn64{{Tag: int64(elf.DT_STRTAB), Val: 1 << 40}}},
+			"[ldd/readVaddr] vaddr 0x10000000000 not in any PT_LOAD"},
+		{"string table larger than PT_LOAD", elftest.Fixture{Extra: []elf.Dyn64{{Tag: int64(elf.DT_STRSZ), Val: 1 << 62}}},
+			fmt.Sprintf("[ldd/readVaddr] vaddr 0x%x not in any PT_LOAD", strtab)},
+		{"overflowing string table bounds", elftest.Fixture{Extra: []elf.Dyn64{{Tag: int64(elf.DT_STRSZ), Val: math.MaxUint64 - strtab + 1}}},
+			fmt.Sprintf("[ldd/readVaddr] vaddr 0x%x not in any PT_LOAD", strtab)},
+		{"PT_LOAD past end of file", elftest.Fixture{
+			Progs: func(p []elf.Prog64) { elftest.Prog(p, elf.PT_LOAD).Filesz += 1 << 20 },
+			Extra: []elf.Dyn64{{Tag: int64(elf.DT_STRSZ), Val: 1 << 19}},
+		}, fmt.Sprintf("[ldd/readVaddr] truncated data at vaddr 0x%x", strtab)},
+		{"string offset out of range", elftest.Fixture{Extra: []elf.Dyn64{{Tag: int64(elf.DT_STRSZ), Val: 1}}},
+			"[ldd/readDynTable] string offset out of range: 1"},
+		{"missing DT_STRTAB", elftest.Fixture{Omit: []elf.DynTag{elf.DT_STRTAB}},
+			"[ldd/readDynTable] DT_STRTAB is missing"},
+		{"missing DT_STRSZ", elftest.Fixture{Omit: []elf.DynTag{elf.DT_STRSZ}},
+			"[ldd/readDynTable] DT_STRSZ is missing"},
+		{"one-byte PT_DYNAMIC", elftest.Fixture{Progs: func(p []elf.Prog64) { elftest.Prog(p, elf.PT_DYNAMIC).Filesz = 1 }},
+			"[ldd/readDynTable] truncated dynamic entry"},
+		// Cutting DT_NULL in half leaves a partial entry before the terminator.
+		{"partial DT_NULL", elftest.Fixture{Progs: func(p []elf.Prog64) { elftest.Prog(p, elf.PT_DYNAMIC).Filesz -= 8 }},
+			"[ldd/readDynTable] truncated dynamic entry"},
+		// The string table is "\x00libone.so\x00"; nine bytes cut the NUL after "libone.s".
+		{"unterminated string", elftest.Fixture{Extra: []elf.Dyn64{{Tag: int64(elf.DT_STRSZ), Val: 9}}},
+			"[ldd/readDynTable] unterminated string at offset 1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "lib.so")
+			tt.fx.Entries = elftest.Needed("libone.so")
+			elftest.Write(t, path, tt.fx)
+			_, err := readElf(path, "lib", "")
+			require.EqualError(t, err, tt.want)
+		})
+	}
+}
+
+func TestReadElfWithoutStringEntries(t *testing.T) {
+	// ld.so itself has PT_DYNAMIC but no DT_NEEDED; the string table is not needed then.
+	path := filepath.Join(t.TempDir(), "ld.so")
+	elftest.Write(t, path, elftest.Fixture{Omit: []elf.DynTag{elf.DT_STRTAB, elf.DT_STRSZ}})
+	info, err := readElf(path, "lib", "")
+	require.NoError(t, err)
+	require.Empty(t, info.Needed)
+	require.Empty(t, info.SONAME)
+	require.False(t, info.HasRunPath)
 }

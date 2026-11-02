@@ -44,7 +44,9 @@ func (p *pathResolver) resolve(rPaths []string) (string, bool, error) {
 		return path, true, nil
 	}
 	// 4: use ld.so.cache
-	if path, ok := p.ldSoCache.ResolveLibrary(p.targetLib, p.srcElf.ldCacheABI()); ok {
+	if path, ok, err := p.lookupLdCache(); err != nil {
+		return "", false, err
+	} else if ok {
 		return path, true, nil
 	}
 	// 5: use default system library paths
@@ -63,6 +65,14 @@ func (p *pathResolver) resolveLibraryPath(paths []string) (string, bool, error) 
 		targets = append(targets, target)
 	}
 	return p.resolvePath(targets)
+}
+
+func (p *pathResolver) lookupLdCache() (string, bool, error) {
+	path, found := p.ldSoCache.ResolveLibrary(p.targetLib, p.srcElf.ldCacheABI())
+	if !found {
+		return "", false, nil
+	}
+	return p.resolvePath([]string{path})
 }
 
 func (p *pathResolver) resolvePath(paths []string) (string, bool, error) {

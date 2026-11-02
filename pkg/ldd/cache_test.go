@@ -1,6 +1,7 @@
 package ldd
 
 import (
+	"encoding/binary"
 	"io"
 	"os"
 	"path/filepath"
@@ -102,4 +103,20 @@ func TestCacheReload(t *testing.T) {
 		require.Equal(t, libPath, resolved)
 		require.Len(t, cache.keyMap.Get("libfoo.so"), 1)
 	}
+}
+
+func TestCacheSkipsHWCapEntries(t *testing.T) {
+	data := cacheFixture(
+		cacheRecord{"libfoo.so", "/lib/glibc-hwcaps/x86-64-v3/libfoo.so", 0x303},
+		cacheRecord{"libfoo.so", "/lib/libfoo.so", 0x303},
+	)
+	// HWCap of the first entry: the glibc-hwcaps extension bit and subdirectory index 0.
+	binary.LittleEndian.PutUint64(data[48+16:], 1<<62)
+	path := filepath.Join(t.TempDir(), "cache")
+	require.NoError(t, os.WriteFile(path, data, 0644))
+	var cache LdCache
+	require.NoError(t, cache.load(path))
+	resolved, ok := cache.ResolveLibrary("libfoo.so", kABIFlagX86_64_Glibc6)
+	require.True(t, ok)
+	require.Equal(t, "/lib/libfoo.so", resolved)
 }

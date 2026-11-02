@@ -2,7 +2,6 @@ package bistro
 
 import (
 	"debug/elf"
-	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/internal/elftest"
 	"github.com/loilo-inc/bistro/pkg/ldd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -202,15 +202,15 @@ func TestScannerRetriesFailedOwnerLookup(t *testing.T) {
 	assert.Equal(t, 2, calls, "retry failed lookups and cache successful scans of unowned files")
 }
 
-func TestScannerMalformedDynamicSection(t *testing.T) {
+func TestScannerMalformedDynamicSegment(t *testing.T) {
 	path := filepath.Join(rootFSTempDir(t), "library.so")
-	writeTestELF(t, path, elf.ET_DYN, false, "libfoo.so")
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	sectionOffset := binary.LittleEndian.Uint64(data[40:])
-	// A dynamic entry requires both a tag and value; a one-byte section is invalid.
-	binary.LittleEndian.PutUint64(data[int(sectionOffset)+128+32:], 1)
-	require.NoError(t, os.WriteFile(path, data, 0644))
-	_, err = NewScanner(DI{Query: unownedFilesQuery()}).Scan(path)
-	require.ErrorContains(t, err, "dynamic section")
+	elftest.Write(t, path, elftest.Fixture{
+		Machine: elf.EM_AARCH64,
+		Entries: elftest.Needed("libfoo.so"),
+		// Extend PT_DYNAMIC well past the end of file.
+		Progs: func(p []elf.Prog64) { elftest.Prog(p, elf.PT_DYNAMIC).Filesz += 1 << 20 },
+	})
+	s := NewScanner(DI{Query: unownedFilesQuery(), Ldd: ldd.NewResolver(ldd.ResolverOptions{})})
+	_, err := s.Scan(path)
+	require.EqualError(t, err, "[ldd/readElf] malformed ELF file: "+path+": [ldd/readDynTable] truncated PT_DYNAMIC")
 }

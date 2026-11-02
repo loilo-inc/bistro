@@ -150,14 +150,10 @@ func (s *scanner) handleFile(path string) (*ElfFile, bool, error) {
 	}
 	defer elfFile.Close()
 	if elfFile.Type == elf.ET_EXEC || elfFile.Type == elf.ET_DYN {
-		needsLdd, err := needsLdd(elfFile)
-		if err != nil {
-			return nil, false, err
-		}
 		ef := &ElfFile{
 			Path:     path,
 			Type:     elfFile.Type,
-			NeedsLdd: needsLdd,
+			NeedsLdd: needsLdd(elfFile),
 		}
 		s.fileCache[path] = ef
 		return ef, true, nil
@@ -166,18 +162,11 @@ func (s *scanner) handleFile(path string) (*ElfFile, bool, error) {
 	return nil, false, nil
 }
 
-func needsLdd(file *elf.File) (bool, error) {
-	libs, err := file.ImportedLibraries()
-	if err != nil {
-		return false, err
-	}
-	if len(libs) > 0 {
-		return true, nil
-	}
+func needsLdd(file *elf.File) bool {
 	for _, p := range file.Progs {
-		if p.Type == elf.PT_INTERP {
-			return true, nil
+		if p.Type == elf.PT_DYNAMIC {
+			return true
 		}
 	}
-	return false, nil
+	return false
 }

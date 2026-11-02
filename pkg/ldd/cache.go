@@ -45,7 +45,8 @@ func (l *LdCache) doResolve(libName string, abiFlag cacheABI) string {
 		return ""
 	}
 	for _, entry := range candidates {
-		if entry.Flags == int32(abiFlag) {
+		// Use only baseline entries; glibc-hwcaps variants depend on the deployment host's CPU.
+		if entry.Flags == int32(abiFlag) && entry.HWCap == 0 {
 			return l.readString(entry.Value)
 		}
 	}
