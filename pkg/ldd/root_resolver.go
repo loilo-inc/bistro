@@ -12,7 +12,6 @@ import (
 type rootResolver struct {
 	*resolver
 	ldLibraryPaths []string
-	elfCache       util.Map[string, *elfInfo]
 	// lib -> loaded library
 	loaded util.Map[string, *Library]
 	// path -> list of dependent libraries

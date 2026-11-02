@@ -22,17 +22,9 @@ func (p *pathResolver) resolve(rPaths []string) (string, bool, error) {
 			return "", false, err
 		}
 		return p.resolvePath([]string{absPath})
-	} else if p.srcElf.HasRunPath {
-		// ignore rPath inheritance when DT_RUNPATH is present
-		return p.resolveLibrary(nil)
-	} else {
-		return p.resolveLibrary(rPaths)
 	}
-}
-
-func (p *pathResolver) resolveLibrary(rPaths []string) (string, bool, error) {
 	// 1: use DT_RPATH, if DT_RUNPATH not present
-	if len(p.srcElf.RunPaths) == 0 {
+	if !p.srcElf.HasRunPath {
 		if path, ok, err := p.resolveLibraryPath(rPaths); err != nil {
 			return "", false, err
 		} else if ok {

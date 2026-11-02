@@ -46,31 +46,10 @@ func (f *finder) TraceDepsForExecutable(file string) (*ExeTraceResult, error) {
 		return nil, err
 	}
 
-	var uniqueLibs []*ldd.Library
-	var visitedLibs = make(map[string]struct{})
-	var queue []*ldd.Library
-	queue = append(queue, rootLibs...)
-
-	for len(queue) > 0 {
-		lib := queue[0]
-		queue = queue[1:]
-		var libKey = lib.Path
-		if libKey == "" {
-			libKey = "[BROKEN]" + lib.Name
-		}
-		if _, ok := visitedLibs[libKey]; ok {
-			continue
-		}
-		uniqueLibs = append(uniqueLibs, lib)
-		visitedLibs[libKey] = struct{}{}
-		queue = append(queue, lib.Deps...)
-	}
+	uniqueLibs, broken := ldd.FlattenDeps(rootLibs...)
+	result.BrokenLibs = append(result.BrokenLibs, broken...)
 
 	for _, lib := range uniqueLibs {
-		if lib.IsBroken() {
-			result.BrokenLibs = append(result.BrokenLibs, lib.Name)
-			continue
-		}
 		realpath, err := realpath(lib.Path)
 		if err != nil {
 			return nil, err

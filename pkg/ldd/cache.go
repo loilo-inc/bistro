@@ -29,19 +29,13 @@ type CacheEntry struct {
 }
 
 type LdCache struct {
-	entries  []*CacheEntry
-	data     []byte
-	keyMap   util.Map[string, []*CacheEntry]
-	resolved util.Map[string, string]
+	entries []*CacheEntry
+	data    []byte
+	keyMap  util.Map[string, []*CacheEntry]
 }
 
 func (l *LdCache) ResolveLibrary(libName string, abiFlag cacheABI) (string, bool) {
-	abiKey := fmt.Sprintf("%s:%x", libName, abiFlag)
-	if path, ok := l.resolved.LookUp(abiKey); ok {
-		return path, path != ""
-	}
 	path := l.doResolve(libName, abiFlag)
-	l.resolved.Set(abiKey, path)
 	return path, path != ""
 }
 
@@ -86,8 +80,7 @@ func (l *LdCache) load(path string) error {
 	}
 	l.data = data
 	l.entries = entries
-	l.keyMap = util.Map[string, []*CacheEntry]{}
-	l.resolved = util.Map[string, string]{}
+	l.keyMap.Clear()
 	for _, entry := range entries {
 		k := l.readString(entry.Key)
 		l.keyMap.Set(k, append(l.keyMap.Get(k), entry))

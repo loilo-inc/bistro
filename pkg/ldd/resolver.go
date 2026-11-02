@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/loilo-inc/bistro/pkg/util"
 )
 
 type Resolver interface {
@@ -16,20 +18,11 @@ type resolver struct {
 	sysLibraryPaths []string
 	tokenLib        string
 	tokenPlatform   string
+	elfCache        util.Map[string, *elfInfo]
 	ldSoCache       LdCache
 }
 
 var _ Resolver = (*resolver)(nil)
-
-type Library struct {
-	Name string
-	Path string
-	Deps []*Library
-}
-
-func (l *Library) IsBroken() bool {
-	return l.Path == ""
-}
 
 type ResolverOptions struct {
 	LdLibraryPath string
