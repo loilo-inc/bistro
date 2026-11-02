@@ -1,0 +1,98 @@
+package ldd
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestCacheResolveLibrary(t *testing.T) {
+	cache := testResolver(t, ResolverOptions{},
+		cacheRecord{"libfoo.so", "/arm/libfoo.so", 0xa03},
+		cacheRecord{"libfoo.so", "/amd/libfoo.so", 0x303},
+		cacheRecord{"libfoo.so", "/other/libfoo.so", 0x303},
+		cacheRecord{"libfoo.so", "/i386/libfoo.so", 3},
+		cacheRecord{"arm-only.so", "/arm/only.so", 0xa03},
+		cacheRecord{"wrong-type.so", "/wrong/type.so", 0x301},
+	).ldSoCache
+	for _, tt := range []struct {
+		name string
+		abi  ABI
+		want string
+	}{
+		{"libfoo.so", kABIArm64_Glibc6, "/arm/libfoo.so"},
+		{"libfoo.so", kABIX86_64_Glibc6, "/amd/libfoo.so"},
+		{"arm-only.so", kABIX86_64_Glibc6, ""},
+		{"wrong-type.so", kABIX86_64_Glibc6, ""},
+		{"missing.so", kABIX86_64_Glibc6, ""},
+	} {
+		// Repeat requests to cover both hits and misses after memoization.
+		for range 2 {
+			path, ok := cache.ResolveLibrary(tt.name, tt.abi)
+			require.Equal(t, tt.want, path)
+			require.Equal(t, tt.want != "", ok)
+		}
+	}
+}
+
+func TestParseLdSoCacheInvalid(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		mutate func([]byte) []byte
+		want   string
+	}{
+		{"truncated header", func(b []byte) []byte { return b[:20] }, "EOF"},
+		{"magic", func(b []byte) []byte { b[0] = '?'; return b }, "unsupported cache format"},
+		{"version", func(b []byte) []byte { b[19] = '2'; return b }, "unsupported cache format"},
+		{"byte order", func(b []byte) []byte { b[28] = 3; return b }, "unsupported byte order"},
+		{"truncated entry", func(b []byte) []byte { return b[:60] }, "EOF"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseLdSoCache(tt.mutate(cacheFixture(cacheRecord{"lib.so", "/lib/lib.so", 0x303})))
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
+	entries, err := ParseLdSoCache(cacheFixture())
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
+func TestCacheLoadFailures(t *testing.T) {
+	var cache LdCache
+	path := filepath.Join(t.TempDir(), "cache")
+	require.NoError(t, cache.load(path))
+	resolved, ok := cache.ResolveLibrary("missing.so", kABIX86_64_Glibc6)
+	require.Empty(t, resolved)
+	require.False(t, ok)
+	require.NoError(t, os.WriteFile(path, []byte("invalid"), 0644))
+	require.Error(t, cache.load(path))
+	require.Error(t, cache.load(t.TempDir()))
+}
+
+func TestParseLdSoCache(t *testing.T) {
+	data := cacheFixture(
+		cacheRecord{"libfoo.so", "/arm/libfoo.so", 0xa03},
+		cacheRecord{"libbar.so", "/amd/libbar.so", 0x303},
+	)
+	entries, err := ParseLdSoCache(data)
+	require.NoError(t, err)
+	require.Equal(t, []*CacheEntry{
+		{Flags: 0xa03, Key: 96, Value: 106},
+		{Flags: 0x303, Key: 121, Value: 131},
+	}, entries)
+}
+
+func TestCacheReload(t *testing.T) {
+	var cache LdCache
+	path := filepath.Join(t.TempDir(), "cache")
+	for _, libPath := range []string{"/first/libfoo.so", "/second/libfoo.so"} {
+		require.NoError(t, os.WriteFile(path, cacheFixture(cacheRecord{"libfoo.so", libPath, 0x303}), 0644))
+		require.NoError(t, cache.load(path))
+		resolved, ok := cache.ResolveLibrary("libfoo.so", kABIX86_64_Glibc6)
+		require.True(t, ok)
+		require.Equal(t, libPath, resolved)
+		require.Len(t, cache.keyMap.Get("libfoo.so"), 1)
+	}
+}

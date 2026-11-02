@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/ldd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,10 +34,10 @@ func TestScannerELFTypes(t *testing.T) {
 			path := filepath.Join(rootFSTempDir(t), "fixture")
 			writeTestELF(t, path, tt.typ, tt.interp, tt.libs...)
 			calls := 0
-			s := NewScanner(DI{Query: unownedFilesQuery(), Ldd: stubLdd(func(got string) (*LinkInfo, error) {
+			s := NewScanner(DI{Query: unownedFilesQuery(), Ldd: stubLdd(func(got string) ([]*ldd.Library, error) {
 				calls++
 				assert.Equal(t, path, got)
-				return &LinkInfo{Libs: []*Library{{Name: "missing"}}}, nil
+				return []*ldd.Library{{Name: "missing"}}, nil
 			})})
 			for range 2 {
 				deps, err := s.Scan(path)
@@ -159,7 +160,7 @@ func TestScannerFailures(t *testing.T) {
 func TestScannerDependencies(t *testing.T) {
 	path := filepath.Join(rootFSTempDir(t), "program")
 	writeTestELF(t, path, elf.ET_EXEC, true)
-	want := []*ExeDependency{{Library: &Library{Name: "libfoo.so", Path: "/lib/libfoo.so"}, Package: testPackage(t, "foo", "", "", "")}}
+	want := []*ExeDependency{{Library: &ldd.Library{Name: "libfoo.so", Path: "/lib/libfoo.so"}, Package: testPackage(t, "foo", "", "", "")}}
 	s := NewScanner(DI{Query: unownedFilesQuery()}).(*scanner)
 	s.finder = stubFinder{findPackage: func(string) (*dpkg.Package, error) { return nil, errPackageNotFound }, trace: func(got string) (*ExeTraceResult, error) {
 		assert.Equal(t, path, got)

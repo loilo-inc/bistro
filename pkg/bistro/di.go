@@ -1,10 +1,12 @@
 package bistro
 
-import "github.com/loilo-inc/bistro/pkg/dpkg"
+import (
+	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/ldd"
+)
 
 type DI struct {
-	Execer Execer
 	Logger Logger
-	Ldd    Ldd
+	Ldd    ldd.Resolver
 	Query  dpkg.Query
 }

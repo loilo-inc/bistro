@@ -10,9 +10,28 @@ import (
 	"testing"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/ldd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// These CLI tests do not scan ELF files or use the host's ld.so.cache.
+type cacheOnlyResolver struct {
+	t     *testing.T
+	loads int
+}
+
+func (r *cacheOnlyResolver) Load() error {
+	r.t.Helper()
+	r.loads++
+	return nil
+}
+
+func (r *cacheOnlyResolver) ListObjects(string) ([]*ldd.Library, error) {
+	r.t.Helper()
+	r.t.Fatal("unexpected ELF dependency scan")
+	return nil, nil
+}
 
 func TestHelpWithoutDpkgDatabase(t *testing.T) {
 	for _, command := range []string{"", "scan", "bundle"} {
@@ -30,14 +49,19 @@ func TestHelpWithoutDpkgDatabase(t *testing.T) {
 					_ = writer.Close()
 					_ = reader.Close()
 				})
-				application := New("v", "c", "d").(*app)
+				created, err := New("v", "c", "d")
+				require.NoError(t, err)
+				application := created.(*app)
 				application.DI.Query = query
+				resolver := &cacheOnlyResolver{t: t}
+				application.DI.Ldd = resolver
 				args := []string{"bistro"}
 				if command != "" {
 					args = append(args, command)
 				}
 				args = append(args, flag)
 				require.NoError(t, application.Run(context.Background(), args))
+				assert.Zero(t, resolver.loads)
 				require.NoError(t, writer.Close())
 				output, err := io.ReadAll(reader)
 				require.NoError(t, err)
@@ -59,12 +83,17 @@ func TestBundleCopyFlags(t *testing.T) {
 	// Use an empty database so CLI loading does not depend on the host's dpkg.
 	baseDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "status"), nil, 0644))
-	application := New("v", "c", "d").(*app)
+	created, err := New("v", "c", "d")
+	require.NoError(t, err)
+	application := created.(*app)
 	application.DI.Query = dpkg.NewQueryWithBaseDir(baseDir)
+	resolver := &cacheOnlyResolver{t: t}
+	application.DI.Ldd = resolver
 	err = application.Run(context.Background(), []string{
 		"bistro", "bundle", "-o", out, "--copy", "first", "--copy", "second",
 	})
 	require.NoError(t, err)
+	assert.Equal(t, 1, resolver.loads)
 	f, err := os.Open(out)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = f.Close() })

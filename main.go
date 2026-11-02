@@ -16,10 +16,13 @@ var (
 )
 
 func main() {
-	cli := app.New(version, commit, date)
-	ctx := context.Background()
-	err := cli.Run(ctx, os.Args)
+	cli, err := app.New(version, commit, date)
 	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	ctx := context.Background()
+	if err := cli.Run(ctx, os.Args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

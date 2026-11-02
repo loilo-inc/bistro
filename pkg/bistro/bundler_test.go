@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/ldd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +34,7 @@ func TestBundlerMergesInputs(t *testing.T) {
 	var scanned []string
 	b.scanner = stubScanner(func(path string) ([]*ElfDependency, error) {
 		scanned = append(scanned, path)
-		return []*ElfDependency{{ElfFile: &ElfFile{Path: path}, Dependencies: []*ExeDependency{{Library: &Library{Path: "/lib/unowned.so"}}, {Package: pkg}, {Package: testPackage(t, pkg.NameWithArch(), pkg.Version(), pkg.Architecture(), pkg.Status().Current)}}}}, nil
+		return []*ElfDependency{{ElfFile: &ElfFile{Path: path}, Dependencies: []*ExeDependency{{Library: &ldd.Library{Path: "/lib/unowned.so"}}, {Package: pkg}, {Package: testPackage(t, pkg.NameWithArch(), pkg.Version(), pkg.Architecture(), pkg.Status().Current)}}}}, nil
 	})
 	out := filepath.Join(dir, "bundle.tar")
 	require.NoError(t, b.Bundle(BundleInput{Out: out, Files: []string{file, file}, Scans: []string{scan}, Packages: []string{pkg.NameWithArch(), other.NameWithArch()}}))
@@ -108,10 +109,10 @@ func TestBundlerCollectsTargetPackage(t *testing.T) {
 				pkg := testPackage(t, "app", "", "", dpkg.StatusInstalled)
 				d := packageFilesStub(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {program, data}})
 				traces := 0
-				l := stubLdd(func(path string) (*LinkInfo, error) {
+				l := stubLdd(func(path string) ([]*ldd.Library, error) {
 					traces++
 					assert.Equal(t, target, path)
-					return &LinkInfo{}, nil
+					return nil, nil
 				})
 				out := filepath.Join(dir, "bundle.tar")
 				require.NoError(t, NewBundler(DI{Query: d, Ldd: l}).Bundle(BundleInput{Out: out, Files: []string{target}}))
@@ -161,10 +162,10 @@ func TestBundlerScansELFAndCollectsOwningPackages(t *testing.T) {
 		}
 		return pkg, nil
 	}
-	l := stubLdd(func(path string) (*LinkInfo, error) {
+	l := stubLdd(func(path string) ([]*ldd.Library, error) {
 		traces++
 		assert.Contains(t, []string{program, extension}, path)
-		return &LinkInfo{Libs: []*Library{{Name: "libfoo.so", Path: library}}}, nil
+		return []*ldd.Library{{Name: "libfoo.so", Path: library}}, nil
 	})
 	out := filepath.Join(dir, "bundle.tar")
 	require.NoError(t, NewBundler(DI{Query: d, Ldd: l}).Bundle(BundleInput{

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/ldd"
 )
 
 type Finder interface {
@@ -15,19 +16,15 @@ type Finder interface {
 
 type finder struct {
 	DI
-	lddCache map[string]*LinkInfo
 }
 
 type ExeDependency struct {
-	Library *Library
+	Library *ldd.Library
 	Package *dpkg.Package
 }
 
 func NewFinder(di DI) Finder {
-	return &finder{
-		DI:       di,
-		lddCache: map[string]*LinkInfo{},
-	}
+	return &finder{DI: di}
 }
 
 type ExeTraceResult struct {
@@ -37,19 +34,39 @@ type ExeTraceResult struct {
 
 var _ Finder = &finder{}
 
-func (b *finder) TraceDepsForExecutable(file string) (*ExeTraceResult, error) {
+func (f *finder) TraceDepsForExecutable(file string) (*ExeTraceResult, error) {
 	if !filepath.IsAbs(file) {
 		return nil, errors.New("file path is not absolute: " + file)
 	}
 
 	var result ExeTraceResult
 
-	info, err := b.listLibs(file)
+	rootLibs, err := f.DI.Ldd.ListObjects(file)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, lib := range info.Libs {
+	var uniqueLibs []*ldd.Library
+	var visitedLibs = make(map[string]struct{})
+	var queue []*ldd.Library
+	queue = append(queue, rootLibs...)
+
+	for len(queue) > 0 {
+		lib := queue[0]
+		queue = queue[1:]
+		var libKey = lib.Path
+		if libKey == "" {
+			libKey = "[BROKEN]" + lib.Name
+		}
+		if _, ok := visitedLibs[libKey]; ok {
+			continue
+		}
+		uniqueLibs = append(uniqueLibs, lib)
+		visitedLibs[libKey] = struct{}{}
+		queue = append(queue, lib.Deps...)
+	}
+
+	for _, lib := range uniqueLibs {
 		if lib.IsBroken() {
 			result.BrokenLibs = append(result.BrokenLibs, lib.Name)
 			continue
@@ -58,7 +75,7 @@ func (b *finder) TraceDepsForExecutable(file string) (*ExeTraceResult, error) {
 		if err != nil {
 			return nil, err
 		}
-		pkg, err := b.searchPackage(realpath)
+		pkg, err := f.searchPackage(realpath)
 		if err != nil && err != errPackageNotFound {
 			return nil, err
 		}
@@ -79,18 +96,6 @@ func (b *finder) FindPackageForExecutable(file string) (*dpkg.Package, error) {
 		return nil, err
 	}
 	return b.searchPackage(realpath)
-}
-
-func (f *finder) listLibs(file string) (*LinkInfo, error) {
-	if cache, ok := f.lddCache[file]; ok {
-		return cache, nil
-	}
-	info, err := f.DI.Ldd.ListObjects(file)
-	if err != nil {
-		return nil, err
-	}
-	f.lddCache[file] = info
-	return info, nil
 }
 
 var errPackageNotFound = errors.New("package not found")

@@ -7,6 +7,7 @@ import (
 
 	"github.com/loilo-inc/bistro/pkg/bistro"
 	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/ldd"
 	"github.com/urfave/cli/v3"
 )
 
@@ -23,9 +24,11 @@ type app struct {
 
 var _ App = (*app)(nil)
 
-func New(version, commit, date string) App {
-	execer := bistro.NewExecer()
-	ldd := bistro.NewLdd(execer)
+func New(version, commit, date string) (App, error) {
+	ldd, err := ldd.DefaultResolver()
+	if err != nil {
+		return nil, err
+	}
 	query := dpkg.NewQuery()
 	logger := bistro.NewLogger(os.Stdout, os.Stderr)
 
@@ -33,17 +36,22 @@ func New(version, commit, date string) App {
 		DI: bistro.DI{
 			Query:  query,
 			Ldd:    ldd,
-			Execer: execer,
 			Logger: logger,
 		},
 		version: version,
 		commit:  commit,
 		date:    date,
-	}
+	}, nil
 }
 
 func (c *app) load() error {
-	return c.DI.Query.Load()
+	if err := c.DI.Query.Load(); err != nil {
+		return err
+	}
+	if err := c.DI.Ldd.Load(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *app) command() *cli.Command {

@@ -6,8 +6,6 @@ bistro
 ## Prerequisites
 
 - Debian (>=13)
-- dpkg
-- ldd
 
 ## Usage
 

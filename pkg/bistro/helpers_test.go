@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/ldd"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,9 +39,11 @@ type dpkgTestExecer func(string, ...string) ([]byte, error)
 
 func (f dpkgTestExecer) Output(name string, args ...string) ([]byte, error) { return f(name, args...) }
 
-type stubLdd func(string) (*LinkInfo, error)
+type stubLdd func(string) ([]*ldd.Library, error)
 
-func (s stubLdd) ListObjects(path string) (*LinkInfo, error) { return s(path) }
+func (s stubLdd) Load() error { return nil }
+
+func (s stubLdd) ListObjects(path string) ([]*ldd.Library, error) { return s(path) }
 
 type stubFinder struct {
 	trace       func(string) (*ExeTraceResult, error)
