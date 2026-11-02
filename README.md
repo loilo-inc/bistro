@@ -1,11 +1,6 @@
-bistro
----
+# bistro
 
-`bistro` is a build tool for creating portable distroless Docker/OCI images.
-
-## Prerequisites
-
-- Debian (>=13)
+A Debian package bundler for distroless Docker/OCI images.
 
 ## Usage
 
