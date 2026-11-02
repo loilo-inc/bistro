@@ -44,7 +44,7 @@ func (r *rootResolver) listObjects(path string, parentRPaths []string) (*searchR
 
 func (r *rootResolver) findLibrary(origLib string, srcElf *elfInfo, rPaths []string) (*Library, error) {
 
-	lib := expandVars(origLib, srcElf.Origin, r.tokenLib, r.tokenPlatform)
+	lib := expandVars(origLib, srcElf.Origin, r.dstLib, r.dstPlatform)
 
 	// check load chache by requested library name
 	if loaded, ok := r.loaded.LookUp(lib); ok {
@@ -102,7 +102,7 @@ func (r *rootResolver) readElf(path string) (*elfInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("[ldd/readElf] malformed ELF file: %s: %w", path, err)
 	}
-	info, err := newElf(elfFile, path, r.tokenLib, r.tokenPlatform)
+	info, err := newElf(elfFile, path, r.dstLib, r.dstPlatform)
 	if err != nil {
 		return nil, fmt.Errorf("[ldd/readElf] malformed ELF file: %s: %w", path, err)
 	}

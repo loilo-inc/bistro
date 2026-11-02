@@ -49,9 +49,7 @@ func TestHelpWithoutDpkgDatabase(t *testing.T) {
 					_ = writer.Close()
 					_ = reader.Close()
 				})
-				created, err := New("v", "c", "d")
-				require.NoError(t, err)
-				application := created.(*app)
+				application := New("v", "c", "d").(*app)
 				application.DI.Query = query
 				resolver := &cacheOnlyResolver{t: t}
 				application.DI.Ldd = resolver
@@ -83,9 +81,7 @@ func TestBundleCopyFlags(t *testing.T) {
 	// Use an empty database so CLI loading does not depend on the host's dpkg.
 	baseDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "status"), nil, 0644))
-	created, err := New("v", "c", "d")
-	require.NoError(t, err)
-	application := created.(*app)
+	application := New("v", "c", "d").(*app)
 	application.DI.Query = dpkg.NewQueryWithBaseDir(baseDir)
 	resolver := &cacheOnlyResolver{t: t}
 	application.DI.Ldd = resolver

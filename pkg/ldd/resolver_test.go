@@ -4,6 +4,7 @@ import (
 	"debug/elf"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -80,11 +81,22 @@ func TestResolverErrorsAndNoDependencies(t *testing.T) {
 }
 
 func TestNewResolverSystemPaths(t *testing.T) {
-	r := NewResolver(ResolverOptions{Lib: "lib/x86_64-linux-gnu"})
+	r := NewResolver(ResolverOptions{DstLib: "lib/x86_64-linux-gnu"}).(*resolver)
 	require.Equal(t, []string{
 		"/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu",
 		"/lib", "/usr/lib", "/lib64", "/usr/lib64",
 	}, r.sysLibraryPaths)
+	r = NewResolver(ResolverOptions{}).(*resolver)
+	require.Equal(t, []string{"/lib", "/usr/lib", "/lib64", "/usr/lib64"}, r.sysLibraryPaths,
+		"an empty $LIB must not add / or /usr as search paths")
+}
+
+func TestDefaultResolver(t *testing.T) {
+	t.Setenv("LD_LIBRARY_PATH", "/opt/lib")
+	r := DefaultResolver().(*resolver)
+	require.Equal(t, "/opt/lib", r.ldLibraryPath)
+	require.Equal(t, getDstLib(runtime.GOARCH), r.dstLib)
+	require.Equal(t, getDstPlatform(runtime.GOARCH), r.dstPlatform)
 }
 
 func TestResolverLibraryPathVariables(t *testing.T) {
@@ -96,7 +108,7 @@ func TestResolverLibraryPathVariables(t *testing.T) {
 	writeELF(t, filepath.Join(filepath.Dir(mid), "libs", "x86_64", "leaf.so"))
 	r := testResolver(t, ResolverOptions{
 		LdLibraryPath: "$ORIGIN/${LIB}/$PLATFORM",
-		Lib:           "libs", Platform: "x86_64",
+		DstLib:        "libs", DstPlatform: "x86_64",
 	})
 	for _, name := range []string{"a", "b", "a"} {
 		rootDir := filepath.Join(dir, name)

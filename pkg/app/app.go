@@ -24,11 +24,8 @@ type app struct {
 
 var _ App = (*app)(nil)
 
-func New(version, commit, date string) (App, error) {
-	ldd, err := ldd.DefaultResolver()
-	if err != nil {
-		return nil, err
-	}
+func New(version, commit, date string) App {
+	ldd := ldd.DefaultResolver()
 	query := dpkg.NewQuery()
 	logger := bistro.NewLogger(os.Stdout, os.Stderr)
 
@@ -41,7 +38,7 @@ func New(version, commit, date string) (App, error) {
 		version: version,
 		commit:  commit,
 		date:    date,
-	}, nil
+	}
 }
 
 func (c *app) load() error {

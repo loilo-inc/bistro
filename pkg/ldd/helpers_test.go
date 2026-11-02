@@ -92,7 +92,7 @@ func testResolver(t *testing.T, options ResolverOptions, records ...cacheRecord)
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "ld.so.cache")
 	require.NoError(t, os.WriteFile(path, cacheFixture(records...), 0644))
-	r := NewResolver(options)
+	r := NewResolver(options).(*resolver)
 	require.NoError(t, r.ldSoCache.load(path))
 	return r
 }

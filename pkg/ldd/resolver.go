@@ -16,8 +16,8 @@ type Resolver interface {
 type resolver struct {
 	ldLibraryPath   string
 	sysLibraryPaths []string
-	tokenLib        string
-	tokenPlatform   string
+	dstLib          string
+	dstPlatform     string
 	elfCache        util.Map[string, *elfInfo]
 	ldSoCache       LdCache
 }
@@ -26,31 +26,34 @@ var _ Resolver = (*resolver)(nil)
 
 type ResolverOptions struct {
 	LdLibraryPath string
-	Lib           string
-	Platform      string
+	// $LIB Dynamic String Token
+	DstLib string
+	// $PLATFORM Dynamic String Token
+	DstPlatform string
 }
 
-func DefaultResolver() (Resolver, error) {
-	vars, err := getLoaderVars(runtime.GOARCH)
-	if err != nil {
-		return nil, err
-	}
+func DefaultResolver() Resolver {
 	return NewResolver(ResolverOptions{
 		LdLibraryPath: os.Getenv("LD_LIBRARY_PATH"),
-		Lib:           vars.Lib,
-		Platform:      vars.Platform,
-	}), nil
+		DstLib:        getDstLib(runtime.GOARCH),
+		DstPlatform:   getDstPlatform(runtime.GOARCH),
+	})
 }
 
-func NewResolver(input ResolverOptions) *resolver {
+func NewResolver(input ResolverOptions) Resolver {
+	var sysLibraryPath []string
+	if input.DstLib != "" {
+		sysLibraryPath = append(sysLibraryPath,
+			filepath.Join("/", input.DstLib),
+			filepath.Join("/usr", input.DstLib),
+		)
+	}
+	sysLibraryPath = append(sysLibraryPath, "/lib", "/usr/lib", "/lib64", "/usr/lib64")
 	return &resolver{
-		ldLibraryPath: input.LdLibraryPath,
-		sysLibraryPaths: []string{
-			filepath.Join("/", input.Lib),
-			filepath.Join("/usr", input.Lib),
-			"/lib", "/usr/lib", "/lib64", "/usr/lib64"},
-		tokenLib:      input.Lib,
-		tokenPlatform: input.Platform,
+		ldLibraryPath:   input.LdLibraryPath,
+		sysLibraryPaths: sysLibraryPath,
+		dstLib:          input.DstLib,
+		dstPlatform:     input.DstPlatform,
 	}
 }
 
@@ -65,7 +68,7 @@ type searchResult struct {
 
 func (r *resolver) ListObjects(path string) ([]*Library, error) {
 
-	ldLibraryPath := expandVars(r.ldLibraryPath, filepath.Dir(path), r.tokenLib, r.tokenPlatform)
+	ldLibraryPath := expandVars(r.ldLibraryPath, filepath.Dir(path), r.dstLib, r.dstPlatform)
 	ldLibraryPaths := filepath.SplitList(ldLibraryPath)
 
 	rr := &rootResolver{

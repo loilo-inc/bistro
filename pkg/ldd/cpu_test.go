@@ -6,28 +6,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetLoaderVars(t *testing.T) {
+func TestGetDst(t *testing.T) {
 	for _, tt := range []struct {
-		arch string
-		want LoaderVars
+		arch, lib, platform string
 	}{
-		{"amd64", LoaderVars{Lib: "lib/x86_64-linux-gnu", Platform: "x86_64"}},
-		{"arm64", LoaderVars{Lib: "lib/aarch64-linux-gnu", Platform: "aarch64"}},
+		{"amd64", "lib/x86_64-linux-gnu", "x86_64"},
+		{"arm64", "lib/aarch64-linux-gnu", "aarch64"},
+		// Unsupported architectures fall back to empty tokens instead of failing.
+		{"", "", ""},
+		{"386", "", ""},
+		{"arm", "", ""},
+		{"riscv64", "", ""},
+		{"x86_64", "", ""},
 	} {
 		t.Run(tt.arch, func(t *testing.T) {
-			got, err := getLoaderVars(tt.arch)
-			require.NoError(t, err)
-			require.Equal(t, &tt.want, got)
-		})
-	}
-}
-
-func TestGetLoaderVarsUnsupported(t *testing.T) {
-	for _, arch := range []string{"", "386", "arm", "riscv64", "x86_64", "unknown"} {
-		t.Run(arch, func(t *testing.T) {
-			got, err := getLoaderVars(arch)
-			require.Nil(t, got)
-			require.EqualError(t, err, "unsupported architecture: "+arch)
+			require.Equal(t, tt.lib, getDstLib(tt.arch))
+			require.Equal(t, tt.platform, getDstPlatform(tt.arch))
 		})
 	}
 }

@@ -126,7 +126,7 @@ func TestResolverNeededPathVariables(t *testing.T) {
 	writeELF(t, mid, needed("${ORIGIN}/$LIB/${PLATFORM}/leaf.so")...)
 	root := filepath.Join(dir, "app")
 	writeELF(t, root, needed(mid)...)
-	r := testResolver(t, ResolverOptions{Lib: "libs", Platform: "x86_64"})
+	r := testResolver(t, ResolverOptions{DstLib: "libs", DstPlatform: "x86_64"})
 	libs, err := r.ListObjects(root)
 	require.NoError(t, err)
 	require.Len(t, libs, 1)
@@ -148,7 +148,7 @@ func TestResolverNeededVariablesReuseLoadedLibrary(t *testing.T) {
 	root := filepath.Join(dir, "app")
 	writeELF(t, root, append(needed("libx86_64.so", "mid.so"),
 		dynamicString{elf.DT_RUNPATH, a})...)
-	libs, err := testResolver(t, ResolverOptions{Platform: "x86_64"}).ListObjects(root)
+	libs, err := testResolver(t, ResolverOptions{DstPlatform: "x86_64"}).ListObjects(root)
 	require.NoError(t, err)
 	require.Len(t, libs, 2)
 	require.Len(t, libs[1].Deps, 1)
@@ -160,7 +160,7 @@ func TestResolverNeededVariablesReuseLoadedLibrary(t *testing.T) {
 func TestReadElfCache(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lib.so")
 	writeELF(t, path)
-	r := &rootResolver{resolver: NewResolver(ResolverOptions{})}
+	r := &rootResolver{resolver: NewResolver(ResolverOptions{}).(*resolver)}
 	first, err := r.readElf(path)
 	require.NoError(t, err)
 	require.NoError(t, os.Remove(path))
@@ -171,7 +171,7 @@ func TestReadElfCache(t *testing.T) {
 
 func TestRootResolverReadElfDoesNotCacheErrors(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lib.so")
-	r := &rootResolver{resolver: NewResolver(ResolverOptions{})}
+	r := &rootResolver{resolver: NewResolver(ResolverOptions{}).(*resolver)}
 	_, err := r.readElf(path)
 	require.ErrorIs(t, err, os.ErrNotExist)
 	require.NoError(t, os.WriteFile(path, []byte("not ELF"), 0644))
