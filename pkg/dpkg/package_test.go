@@ -12,13 +12,13 @@ import (
 
 func writeFixture(t *testing.T, baseDir, name, content string) {
 	t.Helper()
-	path := filepath.Join(baseDir, name)
+	path := filepath.Join(baseDir, DefaultBaseDir, name)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
 	require.NoError(t, os.WriteFile(path, []byte(content), 0644))
 }
 
-func newTestPackage(baseDir string, fields ...Field) *Package {
-	p := &Package{baseDir: baseDir, fieldsMap: make(map[string]*Field, len(fields))}
+func newTestPackage(baseDir string, fields ...Field) *pkg {
+	p := &pkg{fs: os.DirFS(baseDir), fieldsMap: make(map[string]*Field, len(fields))}
 	for i := range fields {
 		field := &fields[i]
 		p.fields = append(p.fields, field)
@@ -124,12 +124,12 @@ func TestPackageInfoReadErrors(t *testing.T) {
 	baseDir := t.TempDir()
 	p := newTestPackage(baseDir, Field{Key: "Package", Value: "example"})
 	// A directory at the file path reliably causes a read error, even as root.
-	require.NoError(t, os.MkdirAll(filepath.Join(baseDir, "info/example.list"), 0755))
-	require.NoError(t, os.MkdirAll(filepath.Join(baseDir, "info/example.md5sums"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(baseDir, DefaultBaseDir, "info/example.list"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(baseDir, DefaultBaseDir, "info/example.md5sums"), 0755))
 	_, err := p.ListFiles()
-	requireReadDirError(t, err, filepath.Join(baseDir, "info/example.list"))
+	requireReadDirError(t, err, filepath.Join(DefaultBaseDir, "info/example.list"))
 	_, err = p.Md5Sums()
-	requireReadDirError(t, err, filepath.Join(baseDir, "info/example.md5sums"))
+	requireReadDirError(t, err, filepath.Join(DefaultBaseDir, "info/example.md5sums"))
 }
 
 func requireReadDirError(t *testing.T, err error, path string) {

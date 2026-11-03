@@ -5,8 +5,8 @@ import (
 	"debug/elf"
 	"fmt"
 	"io"
-	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/loilo-inc/bistro/pkg/rootfs"
 )
@@ -61,15 +61,14 @@ func expandElfPaths(path rootfs.Path, dynTable map[elf.DynTag][]string, dstLib s
 	dtRPath := dynTable[elf.DT_RPATH]
 	dtRunPath := dynTable[elf.DT_RUNPATH]
 
-	origin := filepath.Dir(path.Path())
+	origin := path.Dir().Path()
 	hasRunPath := len(dtRunPath) > 0
 
 	// only evalueate DT_RPATH if DT_RUNPATH is not present
 	if !hasRunPath {
 		for _, p := range dtRPath {
 			exp := expandVars(p, origin, dstLib, dstPlatform)
-			paths := filepath.SplitList(exp)
-			for _, p := range paths {
+			for p := range strings.SplitSeq(exp, ":") {
 				rPaths = append(rPaths, rootfs.NewPath(p))
 			}
 		}
@@ -77,8 +76,7 @@ func expandElfPaths(path rootfs.Path, dynTable map[elf.DynTag][]string, dstLib s
 
 	for _, p := range dtRunPath {
 		exp := expandVars(p, origin, dstLib, dstPlatform)
-		paths := filepath.SplitList(exp)
-		for _, p := range paths {
+		for p := range strings.SplitSeq(exp, ":") {
 			runPaths = append(runPaths, rootfs.NewPath(p))
 		}
 	}

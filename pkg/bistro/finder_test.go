@@ -8,6 +8,7 @@ import (
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/ldd"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,17 +22,17 @@ func TestFinderTraceDependencies(t *testing.T) {
 	require.NoError(t, os.Symlink("libone.so", alias))
 	lddCalls, lookups := 0, 0
 	pkg := testPackage(t, "shared:arm64", "", "", "unpacked")
-	q := stubQuery{lookup: func(path string) (*dpkg.Package, error) {
+	q := stubQuery{lookup: func(path string) (dpkg.Package, error) {
 		lookups++
 		assert.Contains(t, []string{first, second}, path)
 		return pkg, nil
 	}}
-	libs := []*ldd.Library{{Name: "one", Path: alias}, {Name: "alias", Path: first}, {Name: "missing"}, {Name: "two", Path: second}}
-	f := NewFinder(DI{Query: q, Ldd: stubLdd(func(path string) ([]*ldd.Library, error) {
+	libs := []*ldd.Library{{Name: "one", Path: rootfs.NewPath(alias)}, {Name: "alias", Path: rootfs.NewPath(first)}, {Name: "missing"}, {Name: "two", Path: rootfs.NewPath(second)}}
+	f := NewFinder(testDI(DI{Query: q, Ldd: stubLdd(func(path string) ([]*ldd.Library, error) {
 		lddCalls++
 		assert.Contains(t, []string{"/bin/one", "/bin/two"}, path)
 		return libs, nil
-	})})
+	})}))
 	for _, path := range []string{"/bin/one", "/bin/one", "/bin/two"} {
 		result, err := f.TraceDepsForExecutable(path)
 		require.NoError(t, err)
@@ -64,8 +65,8 @@ func TestFinderFailures(t *testing.T) {
 			if path == "" {
 				path = "/bin/app"
 			}
-			q := stubQuery{lookup: func(string) (*dpkg.Package, error) { return nil, tc.lookupErr }}
-			f := NewFinder(DI{Query: q, Ldd: stubLdd(func(string) ([]*ldd.Library, error) { return []*ldd.Library{{Path: lib}}, tc.lddErr })})
+			q := stubQuery{lookup: func(string) (dpkg.Package, error) { return nil, tc.lookupErr }}
+			f := NewFinder(testDI(DI{Query: q, Ldd: stubLdd(func(string) ([]*ldd.Library, error) { return []*ldd.Library{{Path: rootfs.NewPath(lib)}}, tc.lddErr })}))
 			result, err := f.TraceDepsForExecutable(path)
 			assert.Nil(t, result)
 			require.ErrorContains(t, err, tc.want)
@@ -85,18 +86,18 @@ func TestFinderRetriesFailedCommands(t *testing.T) {
 			calls := map[string]int{}
 			fail := func(name string) bool { calls[name]++; return name == stage && calls[name] == 1 }
 			pkg := testPackage(t, "pkg", "", "", "installed")
-			q := stubQuery{lookup: func(string) (*dpkg.Package, error) {
+			q := stubQuery{lookup: func(string) (dpkg.Package, error) {
 				if fail("lookup") {
 					return nil, failure
 				}
 				return pkg, nil
 			}}
-			f := NewFinder(DI{Query: q, Ldd: stubLdd(func(string) ([]*ldd.Library, error) {
+			f := NewFinder(testDI(DI{Query: q, Ldd: stubLdd(func(string) ([]*ldd.Library, error) {
 				if fail("ldd") {
 					return nil, failure
 				}
-				return []*ldd.Library{{Path: lib}}, nil
-			})})
+				return []*ldd.Library{{Path: rootfs.NewPath(lib)}}, nil
+			})}))
 			_, err := f.TraceDepsForExecutable("/bin/app")
 			require.ErrorIs(t, err, failure)
 			result, err := f.TraceDepsForExecutable("/bin/app")
@@ -111,12 +112,12 @@ func TestFinderRetriesFailedCommands(t *testing.T) {
 func TestFinderUnownedLibrary(t *testing.T) {
 	lib := filepath.Join(rootFSTempDir(t), "library.so")
 	writeRootFSFile(t, lib, "library", 0644)
-	library := &ldd.Library{Name: "library.so", Path: lib}
-	q := stubQuery{lookup: func(path string) (*dpkg.Package, error) {
+	library := &ldd.Library{Name: "library.so", Path: rootfs.NewPath(lib)}
+	q := stubQuery{lookup: func(path string) (dpkg.Package, error) {
 		assert.Equal(t, lib, path)
 		return nil, nil
 	}}
-	f := NewFinder(DI{Query: q, Ldd: stubLdd(func(string) ([]*ldd.Library, error) { return []*ldd.Library{library}, nil })})
+	f := NewFinder(testDI(DI{Query: q, Ldd: stubLdd(func(string) ([]*ldd.Library, error) { return []*ldd.Library{library}, nil })}))
 	result, err := f.TraceDepsForExecutable("/bin/app")
 	require.NoError(t, err)
 	assert.Empty(t, result.BrokenLibs)

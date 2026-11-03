@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,19 +64,19 @@ func TestParseLdSoCacheInvalid(t *testing.T) {
 }
 
 func TestCacheLoadFailures(t *testing.T) {
-	var cache LdCache
+	cache := ldCache{fs: os.DirFS("/")}
 	path := filepath.Join(t.TempDir(), "cache")
-	require.NoError(t, cache.load(path))
+	require.NoError(t, cache.load(rootfs.NewPath(path)))
 	resolved, ok := cache.ResolveLibrary("missing.so", kABIFlagX86_64_Glibc6)
 	require.Empty(t, resolved)
 	require.False(t, ok)
 	require.NoError(t, os.WriteFile(path, []byte("invalid"), 0644))
-	require.ErrorIs(t, cache.load(path), io.ErrUnexpectedEOF)
+	require.ErrorIs(t, cache.load(rootfs.NewPath(path)), io.ErrUnexpectedEOF)
 	dir := t.TempDir()
-	err := cache.load(dir)
+	err := cache.load(rootfs.NewPath(dir))
 	var pathErr *os.PathError
 	require.ErrorAs(t, err, &pathErr)
-	require.Equal(t, dir, pathErr.Path)
+	require.Equal(t, rootfs.NewPath(dir).Path(), pathErr.Path)
 	require.ErrorIs(t, err, syscall.EISDIR)
 }
 
@@ -93,11 +94,11 @@ func TestParseLdSoCache(t *testing.T) {
 }
 
 func TestCacheReload(t *testing.T) {
-	var cache LdCache
+	cache := ldCache{fs: os.DirFS("/")}
 	path := filepath.Join(t.TempDir(), "cache")
 	for _, libPath := range []string{"/first/libfoo.so", "/second/libfoo.so"} {
 		require.NoError(t, os.WriteFile(path, cacheFixture(cacheRecord{"libfoo.so", libPath, 0x303}), 0644))
-		require.NoError(t, cache.load(path))
+		require.NoError(t, cache.load(rootfs.NewPath(path)))
 		resolved, ok := cache.ResolveLibrary("libfoo.so", kABIFlagX86_64_Glibc6)
 		require.True(t, ok)
 		require.Equal(t, libPath, resolved)
@@ -114,8 +115,8 @@ func TestCacheSkipsHWCapEntries(t *testing.T) {
 	binary.LittleEndian.PutUint64(data[48+16:], 1<<62)
 	path := filepath.Join(t.TempDir(), "cache")
 	require.NoError(t, os.WriteFile(path, data, 0644))
-	var cache LdCache
-	require.NoError(t, cache.load(path))
+	cache := ldCache{fs: os.DirFS("/")}
+	require.NoError(t, cache.load(rootfs.NewPath(path)))
 	resolved, ok := cache.ResolveLibrary("libfoo.so", kABIFlagX86_64_Glibc6)
 	require.True(t, ok)
 	require.Equal(t, "/lib/libfoo.so", resolved)

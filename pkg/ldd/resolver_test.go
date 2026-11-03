@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/loilo-inc/bistro/pkg/internal/elftest"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,7 +29,7 @@ func TestResolverBreadthFirst(t *testing.T) {
 	require.Len(t, libs[0].Deps[0].Deps, 1)
 	require.Len(t, libs[1].Deps, 1)
 	leaf := libs[1].Deps[0]
-	require.Equal(t, filepath.Join(b, "leaf.so"), leaf.Path)
+	require.Equal(t, filepath.Join(b, "leaf.so"), leaf.Path.Abs())
 	require.Same(t, leaf, libs[0].Deps[0].Deps[0])
 }
 
@@ -60,7 +61,7 @@ func TestResolverRootIsolation(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, libs, 1)
 		require.Len(t, libs[0].Deps, 1)
-		require.Equal(t, leaf, libs[0].Deps[0].Path)
+		require.Equal(t, leaf, libs[0].Deps[0].Path.Abs())
 	}
 }
 
@@ -72,7 +73,7 @@ func TestResolverErrorsAndNoDependencies(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 	elftest.WriteNotELF(t, root)
 	_, err = r.ListObjects(root)
-	require.ErrorContains(t, err, "[ldd/readElf] malformed ELF file: "+root+": ")
+	require.ErrorContains(t, err, "[ldd/readElf] malformed ELF file: "+rootfs.NewPath(root).Path()+": ")
 	var formatErr *elf.FormatError
 	require.ErrorAs(t, err, &formatErr)
 	elftest.WriteDynamic(t, root)
@@ -82,19 +83,20 @@ func TestResolverErrorsAndNoDependencies(t *testing.T) {
 }
 
 func TestNewResolverSystemPaths(t *testing.T) {
-	r := NewResolver(ResolverOptions{DstLib: "lib/x86_64-linux-gnu"}).(*resolver)
-	require.Equal(t, []string{
-		"/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu",
-		"/lib", "/usr/lib", "/lib64", "/usr/lib64",
-	}, r.sysLibraryPaths)
-	r = NewResolver(ResolverOptions{}).(*resolver)
-	require.Equal(t, []string{"/lib", "/usr/lib", "/lib64", "/usr/lib64"}, r.sysLibraryPaths,
-		"an empty $LIB must not add / or /usr as search paths")
+	r := NewResolver(os.DirFS("/"), ResolverOptions{DstLib: "lib/x86_64-linux-gnu"}).(*resolver)
+	require.Equal(t, testPaths("/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu", "/lib", "/usr/lib", "/lib64", "/usr/lib64"), r.sysLibraryPaths)
+	r = NewResolver(os.DirFS("/"), ResolverOptions{}).(*resolver)
+	want := []string{"/lib", "/usr/lib", "/lib64", "/usr/lib64"}
+	if lib := getDstLib(runtime.GOARCH); lib != "" {
+		want = append([]string{"/" + lib, "/usr/" + lib}, want...)
+	}
+	require.Equal(t, testPaths(want...), r.sysLibraryPaths)
+
 }
 
-func TestDefaultResolver(t *testing.T) {
+func TestNewResolverDefaults(t *testing.T) {
 	t.Setenv("LD_LIBRARY_PATH", "/opt/lib")
-	r := DefaultResolver().(*resolver)
+	r := NewResolver(os.DirFS("/"), ResolverOptions{LdLibraryPath: os.Getenv("LD_LIBRARY_PATH")}).(*resolver)
 	require.Equal(t, "/opt/lib", r.ldLibraryPath)
 	require.Equal(t, getDstLib(runtime.GOARCH), r.dstLib)
 	require.Equal(t, getDstPlatform(runtime.GOARCH), r.dstPlatform)
@@ -121,6 +123,6 @@ func TestResolverLibraryPathVariables(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, libs, 1)
 		require.Len(t, libs[0].Deps, 1)
-		require.Equal(t, leaf, libs[0].Deps[0].Path)
+		require.Equal(t, leaf, libs[0].Deps[0].Path.Abs())
 	}
 }

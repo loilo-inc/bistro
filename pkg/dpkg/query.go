@@ -85,8 +85,12 @@ func (d *query) Get(name string) (Package, error) {
 }
 
 func (d *query) List() ([]Package, error) {
+	packages, err := d.list()
+	if err != nil {
+		return nil, err
+	}
 	var list []Package
-	for _, pkg := range d.packages {
+	for _, pkg := range packages {
 		list = append(list, pkg)
 	}
 	return list, nil
@@ -136,7 +140,7 @@ func (d *query) Load() error {
 		return err
 	}
 	d.filesMap.Clear()
-	d.packages = pkgs
+	d.packages = append([]*pkg{}, pkgs...)
 	d.nameMap.Clear()
 	for _, pkg := range pkgs {
 		pkg.fs = d.fs

@@ -93,7 +93,7 @@ func (b *bundler) Bundle(input BundleInput) error {
 
 	if len(b.brokenDeps) > 0 {
 		dep := b.brokenDeps[0]
-		return fmt.Errorf("some libraries are not linked: %s => %v", dep.ElfFile.Path, dep.BrokenLibs)
+		return fmt.Errorf("some libraries are not linked: %s => %v", dep.ElfFile.Path.Abs(), dep.BrokenLibs)
 	}
 
 	if len(b.missingPackages) > 0 {

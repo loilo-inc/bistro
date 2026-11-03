@@ -37,7 +37,7 @@ func TestHelpWithoutDpkgDatabase(t *testing.T) {
 	for _, command := range []string{"", "scan", "bundle"} {
 		for _, flag := range []string{"--help", "-h"} {
 			t.Run(command+"/"+flag, func(t *testing.T) {
-				query := dpkg.NewQueryWithBaseDir(t.TempDir())
+				query := dpkg.NewQuery(os.DirFS(t.TempDir()))
 				require.ErrorIs(t, query.Load(), os.ErrNotExist)
 
 				reader, writer, err := os.Pipe()
@@ -80,13 +80,14 @@ func TestBundleCopyFlags(t *testing.T) {
 	out := filepath.Join(dir, "bundle.tar")
 	// Use an empty database so CLI loading does not depend on the host's dpkg.
 	baseDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "status"), nil, 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(baseDir, dpkg.DefaultBaseDir), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(baseDir, dpkg.DefaultBaseDir, "status"), nil, 0644))
 	application := New("v", "c", "d").(*app)
-	application.DI.Query = dpkg.NewQueryWithBaseDir(baseDir)
+	application.DI.Query = dpkg.NewQuery(os.DirFS(baseDir))
 	resolver := &cacheOnlyResolver{t: t}
 	application.DI.Ldd = resolver
 	err = application.Run(context.Background(), []string{
-		"bistro", "bundle", "-o", out, "--copy", "first", "--copy", "second",
+		"bistro", "bundle", "-o", out, "--copy", filepath.Join(dir, "first"), "--copy", filepath.Join(dir, "second"),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, 1, resolver.loads)

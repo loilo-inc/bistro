@@ -11,6 +11,7 @@ import (
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/internal/elftest"
 	"github.com/loilo-inc/bistro/pkg/ldd"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,26 +19,22 @@ import (
 type stubQuery struct {
 	dpkg.Query
 	baseDir string
-	get     func(string) (*dpkg.Package, error)
-	lookup  func(string) (*dpkg.Package, error)
+	get     func(string) (dpkg.Package, error)
+	lookup  func(string) (dpkg.Package, error)
 }
 
-func (s stubQuery) Get(name string) (*dpkg.Package, error) {
+func (s stubQuery) Get(name string) (dpkg.Package, error) {
 	if s.get != nil {
 		return s.get(name)
 	}
 	return s.Query.Get(name)
 }
-func (s stubQuery) LookUp(path string) (*dpkg.Package, error) {
+func (s stubQuery) LookUp(path string) (dpkg.Package, error) {
 	if s.lookup != nil {
 		return s.lookup(path)
 	}
 	return s.Query.LookUp(path)
 }
-
-type dpkgTestExecer func(string, ...string) ([]byte, error)
-
-func (f dpkgTestExecer) Output(name string, args ...string) ([]byte, error) { return f(name, args...) }
 
 type stubLdd func(string) ([]*ldd.Library, error)
 
@@ -47,20 +44,20 @@ func (s stubLdd) ListObjects(path string) ([]*ldd.Library, error) { return s(pat
 
 type stubFinder struct {
 	trace       func(string) (*ExeTraceResult, error)
-	findPackage func(string) (*dpkg.Package, error)
+	findPackage func(string) (dpkg.Package, error)
 }
 
 func (s stubFinder) TraceDepsForExecutable(path string) (*ExeTraceResult, error) {
 	return s.trace(path)
 }
-func (s stubFinder) FindPackageForExecutable(path string) (*dpkg.Package, error) {
+func (s stubFinder) FindPackageForExecutable(path string) (dpkg.Package, error) {
 	return s.findPackage(path)
 }
 func unownedFilesQuery() stubQuery {
-	return stubQuery{lookup: func(string) (*dpkg.Package, error) { return nil, nil }}
+	return stubQuery{lookup: func(string) (dpkg.Package, error) { return nil, nil }}
 }
 
-func testPackage(t *testing.T, binaryName, version, arch, status string) *dpkg.Package {
+func testPackage(t *testing.T, binaryName, version, arch, status string) dpkg.Package {
 	t.Helper()
 	name, qualifier, qualified := strings.Cut(binaryName, ":")
 	if arch == "" {
@@ -79,7 +76,7 @@ func testPackage(t *testing.T, binaryName, version, arch, status string) *dpkg.P
 	packages, err := dpkg.ParseStatus(content)
 	require.NoError(t, err)
 	require.Len(t, packages, 1)
-	return packages[0]
+	return &testDpkgPackage{Package: packages[0]}
 }
 
 type stubScanner func(string) ([]*ElfDependency, error)
@@ -106,11 +103,12 @@ func readBundleTar(t *testing.T, path string) map[string]rootFSEntry {
 	return readRootFSTar(t, data)
 }
 
-// Build a real dpkg database, preserving the package pointers used by callers.
-func packageFilesStub(t *testing.T, packages []*dpkg.Package, files map[string][]string) stubQuery {
+// Build a real dpkg database and update the package wrappers used by callers.
+func packageFilesStub(t *testing.T, packages []dpkg.Package, files map[string][]string) stubQuery {
 	t.Helper()
-	baseDir := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(baseDir, "info"), 0755))
+	root := t.TempDir()
+	baseDir := filepath.Join(root, dpkg.DefaultBaseDir)
+	require.NoError(t, os.MkdirAll(filepath.Join(baseDir, "info"), 0755))
 	var status strings.Builder
 	for _, pkg := range packages {
 		status.WriteString(pkg.String())
@@ -120,14 +118,14 @@ func packageFilesStub(t *testing.T, packages []*dpkg.Package, files map[string][
 		require.NoError(t, os.WriteFile(filepath.Join(baseDir, "info", name+".md5sums"), []byte("d41d8cd98f00b204e9800998ecf8427e  usr/share/"+name+"\n"), 0644))
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "status"), []byte(status.String()), 0644))
-	q := dpkg.NewQueryWithBaseDir(baseDir)
+	q := dpkg.NewQuery(os.DirFS(root))
 	require.NoError(t, q.Load())
 	for _, pkg := range packages {
 		loaded, err := q.Get(pkg.Name())
 		require.NoError(t, err)
-		*pkg = *loaded
+		pkg.(*testDpkgPackage).Package = loaded
 	}
-	return stubQuery{Query: q, baseDir: baseDir, get: func(name string) (*dpkg.Package, error) {
+	return stubQuery{Query: q, baseDir: baseDir, get: func(name string) (dpkg.Package, error) {
 		for _, pkg := range packages {
 			if pkg.NameWithArch() == name || pkg.Name() == name {
 				return pkg, nil
@@ -135,4 +133,12 @@ func packageFilesStub(t *testing.T, packages []*dpkg.Package, files map[string][
 		}
 		return nil, fmt.Errorf("package not found: %s", name)
 	}}
+}
+
+type testDpkgPackage struct{ dpkg.Package }
+
+func testDI(di DI) DI {
+	di.FS = os.DirFS("/")
+	di.SymLink = rootfs.NewSymLinkResolver(di.FS)
+	return di
 }

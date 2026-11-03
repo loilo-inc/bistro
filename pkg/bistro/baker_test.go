@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,10 +21,10 @@ func TestBakerCreatesArchive(t *testing.T) {
 	writeRootFSFile(t, owned, "package data", 0640)
 	writeRootFSFile(t, explicit, "binary", 0755)
 	pkg := testPackage(t, "example:arm64", "", "", dpkg.StatusInstalled)
-	d := packageFilesStub(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {owned}})
+	d := packageFilesStub(t, []dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {owned}})
 	out := filepath.Join(dir, "rootfs.tar")
 	writeRootFSFile(t, out, "previous archive", 0644)
-	err := NewBaker(DI{Query: d}).CreateRootFS(&BakeInput{Out: out, DpkgList: []*dpkg.Package{pkg}, Files: []string{explicit, owned, explicit}})
+	err := NewBaker(testDI(DI{Query: d})).CreateRootFS(BakeInput{Out: out, DpkgList: []dpkg.Package{pkg}, Files: []string{explicit, owned, explicit}})
 	require.NoError(t, err)
 	entries := readBundleTar(t, out)
 	assert.Equal(t, "package data", entries[rootFSArchiveName(owned)].body)
@@ -47,11 +48,11 @@ func TestBakerSkipsMissingPackageFiles(t *testing.T) {
 	missing, owned := filepath.Join(dir, "missing"), filepath.Join(dir, "owned")
 	writeRootFSFile(t, owned, "package data", 0644)
 	pkg := testPackage(t, "example", "", "", "")
-	d := packageFilesStub(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {missing, owned}})
+	d := packageFilesStub(t, []dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {missing, owned}})
 	var stderr bytes.Buffer
 	out := filepath.Join(dir, "archive.tar")
-	err := NewBaker(DI{Query: d, Logger: NewLogger(io.Discard, &stderr)}).CreateRootFS(&BakeInput{
-		Out: out, DpkgList: []*dpkg.Package{pkg},
+	err := NewBaker(testDI(DI{Query: d, Logger: NewLogger(io.Discard, &stderr)})).CreateRootFS(BakeInput{
+		Out: out, DpkgList: []dpkg.Package{pkg},
 	})
 	require.NoError(t, err)
 	entries := readBundleTar(t, out)
@@ -72,7 +73,7 @@ func TestBakerFailurePreservesOutputAndRemovesTemporaryFile(t *testing.T) {
 				writeRootFSFile(t, out, "original", 0644)
 			}
 			pkg := testPackage(t, "example", "", "", "")
-			d := packageFilesStub(t, []*dpkg.Package{pkg}, nil)
+			d := packageFilesStub(t, []dpkg.Package{pkg}, nil)
 			if stage == "md5sums" || stage == "file list" {
 				extension := ".md5sums"
 				if stage == "file list" {
@@ -85,11 +86,11 @@ func TestBakerFailurePreservesOutputAndRemovesTemporaryFile(t *testing.T) {
 			if stage == "package file" {
 				require.NoError(t, os.WriteFile(filepath.Join(d.baseDir, "info/example.list"), []byte("relative\n"), 0644))
 			}
-			input := &BakeInput{Out: out, DpkgList: []*dpkg.Package{pkg}}
+			input := BakeInput{Out: out, DpkgList: []dpkg.Package{pkg}}
 			if stage == "explicit file" {
 				input.Files = []string{filepath.Join(dir, "missing")}
 			}
-			err := NewBaker(DI{Query: d}).CreateRootFS(input)
+			err := NewBaker(testDI(DI{Query: d})).CreateRootFS(input)
 			switch stage {
 			case "md5sums", "file list":
 				extension := ".md5sums"
@@ -99,7 +100,7 @@ func TestBakerFailurePreservesOutputAndRemovesTemporaryFile(t *testing.T) {
 				var pathErr *os.PathError
 				require.ErrorAs(t, err, &pathErr)
 				assert.Equal(t, "read", pathErr.Op)
-				assert.Equal(t, filepath.Join(d.baseDir, "info", "example"+extension), pathErr.Path)
+				assert.Equal(t, filepath.Join(dpkg.DefaultBaseDir, "info", "example"+extension), pathErr.Path)
 				assert.ErrorIs(t, err, syscall.EISDIR)
 			case "package file":
 				require.EqualError(t, err, "path must be absolute")
@@ -107,7 +108,7 @@ func TestBakerFailurePreservesOutputAndRemovesTemporaryFile(t *testing.T) {
 				var pathErr *os.PathError
 				require.ErrorAs(t, err, &pathErr)
 				assert.Equal(t, "lstat", pathErr.Op)
-				assert.Equal(t, filepath.Join(dir, "missing"), pathErr.Path)
+				assert.Equal(t, rootfs.NewPath(filepath.Join(dir, "missing")).Path(), pathErr.Path)
 				assert.ErrorIs(t, err, os.ErrNotExist)
 			case "rename":
 				// The errno for renaming a file over a directory differs by OS.
@@ -131,7 +132,7 @@ func TestBakerFailurePreservesOutputAndRemovesTemporaryFile(t *testing.T) {
 
 func TestBakerMissingOutputDirectory(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "missing", "archive.tar")
-	err := NewBaker(DI{}).CreateRootFS(&BakeInput{Out: out})
+	err := NewBaker(testDI(DI{})).CreateRootFS(BakeInput{Out: out})
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
@@ -139,9 +140,9 @@ func TestBakerRejectsConflictingMetadataNames(t *testing.T) {
 	dir := rootFSTempDir(t)
 	out := filepath.Join(dir, "archive.tar")
 	writeRootFSFile(t, out, "original", 0644)
-	err := NewBaker(DI{}).CreateRootFS(&BakeInput{
+	err := NewBaker(testDI(DI{})).CreateRootFS(BakeInput{
 		Out: out,
-		DpkgList: []*dpkg.Package{
+		DpkgList: []dpkg.Package{
 			testPackage(t, "library:arm64", "", "arm64", ""),
 			testPackage(t, "library:amd64", "", "amd64", ""),
 		},
@@ -156,7 +157,7 @@ func TestBakerRejectsConflictingMetadataNames(t *testing.T) {
 }
 
 type failingMetadataRoot struct {
-	RootFS
+	rootfs.Archiver
 	calls, failAt int
 	err           error
 }
@@ -175,8 +176,8 @@ func TestBakerMetadataWriteFailures(t *testing.T) {
 			failure := errors.New("archive write failed")
 			r := &failingMetadataRoot{failAt: failAt, err: failure}
 			pkg := testPackage(t, "example", "", "", "")
-			packageFilesStub(t, []*dpkg.Package{pkg}, nil)
-			b := NewBaker(DI{}).(*baker)
+			packageFilesStub(t, []dpkg.Package{pkg}, nil)
+			b := NewBaker(testDI(DI{})).(*baker)
 			require.ErrorIs(t, b.writePackageMetadata(r, pkg), failure)
 			assert.Equal(t, failAt, r.calls)
 		})
