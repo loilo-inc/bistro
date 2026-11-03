@@ -3,7 +3,7 @@ package ldd
 import (
 	"errors"
 	"io/fs"
-	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -60,8 +60,8 @@ func (p *pathResolver) resolve(rPaths []string) (string, bool, error) {
 
 func (p *pathResolver) resolveLibraryPath(paths []string) (string, bool, error) {
 	var targets []string
-	for _, path := range paths {
-		target := filepath.Join(path, p.targetLib)
+	for _, v := range paths {
+		target := path.Join(v, p.targetLib)
 		targets = append(targets, target)
 	}
 	return p.resolvePath(targets)
@@ -77,7 +77,7 @@ func (p *pathResolver) lookupLdCache() (string, bool, error) {
 
 func (p *pathResolver) resolvePath(paths []string) (string, bool, error) {
 	for _, path := range paths {
-		stat, err := os.Stat(path)
+		stat, err := fs.Stat(p.fs, path)
 		if err != nil {
 			continue
 		}

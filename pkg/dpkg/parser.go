@@ -8,10 +8,10 @@ import (
 
 var attrRegexp = regexp.MustCompile(`^([A-Za-z0-9-]+):\s*(.*)$`)
 
-func ParseStatus(statusContent string) ([]*Package, error) {
-	var current *Package
+func ParseStatus(statusContent string) ([]*pkg, error) {
+	var current *pkg
 	var currentField *Field
-	var packages []*Package
+	var packages []*pkg
 	for line := range strings.SplitSeq(statusContent, "\n") {
 		if line == "" {
 			if current != nil {
@@ -22,7 +22,7 @@ func ParseStatus(statusContent string) ([]*Package, error) {
 			continue
 		}
 		if current == nil {
-			current = &Package{
+			current = &pkg{
 				fieldsMap: make(map[string]*Field),
 			}
 		}

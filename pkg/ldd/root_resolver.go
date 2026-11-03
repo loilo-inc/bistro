@@ -3,7 +3,6 @@ package ldd
 import (
 	"debug/elf"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/loilo-inc/bistro/pkg/util"
@@ -92,13 +91,13 @@ func (r *rootResolver) readElf(path string) (*elfInfo, error) {
 	if cached, ok := r.elfCache.LookUp(path); ok {
 		return cached, nil
 	}
-	file, err := os.Open(path)
+	file, err := r.fs.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 
-	elfFile, err := elf.NewFile(file)
+	elfFile, err := elf.NewFile(util.NewReaderAt(file))
 	if err != nil {
 		return nil, fmt.Errorf("[ldd/readElf] malformed ELF file: %s: %w", path, err)
 	}

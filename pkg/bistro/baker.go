@@ -1,15 +1,18 @@
 package bistro
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 )
 
 type Baker interface {
-	CreateRootFS(input *BakeInput) error
+	CreateRootFS(input BakeInput) error
 }
 
 type baker struct {
@@ -24,11 +27,11 @@ func NewBaker(di DI) Baker {
 
 type BakeInput struct {
 	Out      string
-	DpkgList []*dpkg.Package
+	DpkgList []dpkg.Package
 	Files    []string
 }
 
-func (b *baker) CreateRootFS(input *BakeInput) (err error) {
+func (b *baker) CreateRootFS(input BakeInput) (err error) {
 	// Distroless metadata filenames use the unqualified package name.
 	// Reject collisions before creating an archive that would lose metadata.
 	names := make(map[string]string, len(input.DpkgList))
@@ -48,7 +51,7 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 			os.Remove(tmpFile.Name())
 		}
 	}()
-	rootfs := NewRootFS(tmpFile)
+	rootfs := NewRootFS(b.FS, tmpFile)
 	for _, pkg := range input.DpkgList {
 		if err := b.writePackageMetadata(rootfs, pkg); err != nil {
 			return err
@@ -73,17 +76,17 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 
 // https://github.com/GoogleContainerTools/distroless/blob/main/PACKAGE_METADATA.md
 // directory to store dpkg status used by distroless
-const DpkgStatusDir = "/var/lib/dpkg/status.d"
+const DpkgStatusDir = "var/lib/dpkg/status.d"
 
-func (b *baker) writePackageMetadata(rootFS RootFS, pkg *dpkg.Package) error {
-	if err := rootFS.Add(filepath.Join(DpkgStatusDir, pkg.Name()), []byte(pkg.String()), 0644); err != nil {
+func (b *baker) writePackageMetadata(rootFS RootFS, pkg dpkg.Package) error {
+	if err := rootFS.Add(path.Join(DpkgStatusDir, pkg.Name()), []byte(pkg.String()), 0644); err != nil {
 		return err
 	}
 	md5sums, err := pkg.Md5Sums()
 	if err != nil {
 		return err
 	}
-	if err = rootFS.Add(filepath.Join(DpkgStatusDir, pkg.Name()+".md5sums"), []byte(md5sums.String()), 0644); err != nil {
+	if err = rootFS.Add(path.Join(DpkgStatusDir, pkg.Name()+".md5sums"), []byte(md5sums.String()), 0644); err != nil {
 		return err
 	}
 	files, err := pkg.ListFiles()
@@ -92,7 +95,7 @@ func (b *baker) writePackageMetadata(rootFS RootFS, pkg *dpkg.Package) error {
 	}
 
 	for _, srcPath := range files {
-		if err := rootFS.Copy(srcPath); os.IsNotExist(err) {
+		if err := rootFS.Copy(srcPath); errors.Is(err, fs.ErrNotExist) {
 			b.Logger.Error("File does not exist: %s", srcPath)
 			continue
 		} else if err != nil {

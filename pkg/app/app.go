@@ -25,12 +25,15 @@ type app struct {
 var _ App = (*app)(nil)
 
 func New(version, commit, date string) App {
-	ldd := ldd.DefaultResolver()
-	query := dpkg.NewQuery()
+	fs := os.DirFS("/")
+	ldd := ldd.NewResolver(fs, ldd.ResolverOptions{
+		LdLibraryPath: os.Getenv("LD_LIBRARY_PATH"),
+	})
+	query := dpkg.NewQuery(fs)
 	logger := bistro.NewLogger(os.Stdout, os.Stderr)
-
 	return &app{
 		DI: bistro.DI{
+			FS:     fs,
 			Query:  query,
 			Ldd:    ldd,
 			Logger: logger,

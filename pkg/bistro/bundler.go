@@ -2,11 +2,12 @@ package bistro
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
+	"io/fs"
+	"path"
 	"strings"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 )
 
 type BundleInput struct {
@@ -24,8 +25,8 @@ type Bundler interface {
 type bundler struct {
 	DI
 	scanner         Scanner
-	packages        []*dpkg.Package
-	files           []string
+	packages        []dpkg.Package
+	files           []rootfs.Path
 	missingPackages []string
 	brokenDeps      []*ElfDependency
 	visitedPackages map[string]struct{}
@@ -81,9 +82,11 @@ func (b *bundler) Bundle(input BundleInput) error {
 	}
 
 	for _, copy := range input.Copies {
-		if abs, err := filepath.Abs(copy); err != nil {
-			return err
-		} else if err := b.addCopyFile(abs); err != nil {
+		if !path.IsAbs(copy) {
+			return fmt.Errorf("path must be absolute: %s", copy)
+		}
+		rootPath := rootfs.NewPath(copy)
+		if err := b.addCopyFile(rootPath); err != nil {
 			return err
 		}
 	}
@@ -97,34 +100,34 @@ func (b *bundler) Bundle(input BundleInput) error {
 		str := strings.Join(b.missingPackages, ", ")
 		return fmt.Errorf("depended packages are not installed: %v", str)
 	}
-
-	return baker.CreateRootFS(&BakeInput{
+	var absFiles []string
+	for _, file := range b.files {
+		absFiles = append(absFiles, file.Abs())
+	}
+	return baker.CreateRootFS(BakeInput{
 		Out:      input.Out,
 		DpkgList: b.packages,
-		Files:    b.files,
+		Files:    absFiles,
 	})
 }
 
-func (b *bundler) addCopyFile(file string) error {
-	if !filepath.IsAbs(file) {
-		return fmt.Errorf("path must be absolute: %s", file)
-	}
-	lstat, err := os.Lstat(file)
+func (b *bundler) addCopyFile(path rootfs.Path) error {
+	lstat, err := fs.Lstat(b.FS, path.Path())
 	if err != nil {
 		return err
 	}
 
-	b.files = append(b.files, file)
+	b.files = append(b.files, path)
 
 	if !lstat.IsDir() {
 		return nil
 	}
-	entries, err := os.ReadDir(file)
+	entries, err := fs.ReadDir(b.FS, path.Path())
 	if err != nil {
 		return err
 	}
 	for _, entry := range entries {
-		err := b.addCopyFile(filepath.Join(file, entry.Name()))
+		err := b.addCopyFile(path.Join(entry.Name()))
 		if err != nil {
 			return err
 		}
@@ -148,7 +151,7 @@ func (b *bundler) addDependency(deps ...*ElfDependency) {
 	}
 }
 
-func (b *bundler) addPackage(target ...*dpkg.Package) {
+func (b *bundler) addPackage(target ...dpkg.Package) {
 	for _, t := range target {
 		if _, ok := b.visitedPackages[t.NameWithArch()]; !ok {
 			b.visitedPackages[t.NameWithArch()] = struct{}{}

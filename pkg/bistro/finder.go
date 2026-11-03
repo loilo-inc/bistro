@@ -2,7 +2,7 @@ package bistro
 
 import (
 	"errors"
-	"os"
+	"io/fs"
 	"path/filepath"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
@@ -11,7 +11,7 @@ import (
 
 type Finder interface {
 	TraceDepsForExecutable(file string) (*ExeTraceResult, error)
-	FindPackageForExecutable(file string) (*dpkg.Package, error)
+	FindPackageForExecutable(file string) (dpkg.Package, error)
 }
 
 type finder struct {
@@ -20,7 +20,7 @@ type finder struct {
 
 type ExeDependency struct {
 	Library *ldd.Library
-	Package *dpkg.Package
+	Package dpkg.Package
 }
 
 func NewFinder(di DI) Finder {
@@ -50,7 +50,7 @@ func (f *finder) TraceDepsForExecutable(file string) (*ExeTraceResult, error) {
 	result.BrokenLibs = append(result.BrokenLibs, broken...)
 
 	for _, lib := range uniqueLibs {
-		realpath, err := realpath(lib.Path)
+		realpath, err := f.realpath(lib.Path)
 		if err != nil {
 			return nil, err
 		}
@@ -66,20 +66,20 @@ func (f *finder) TraceDepsForExecutable(file string) (*ExeTraceResult, error) {
 	return &result, nil
 }
 
-func (b *finder) FindPackageForExecutable(file string) (*dpkg.Package, error) {
+func (f *finder) FindPackageForExecutable(file string) (dpkg.Package, error) {
 	if !filepath.IsAbs(file) {
 		return nil, errors.New("file path is not absolute: " + file)
 	}
-	realpath, err := realpath(file)
+	realpath, err := f.realpath(file)
 	if err != nil {
 		return nil, err
 	}
-	return b.searchPackage(realpath)
+	return f.searchPackage(realpath)
 }
 
 var errPackageNotFound = errors.New("package not found")
 
-func (f *finder) searchPackage(file string) (*dpkg.Package, error) {
+func (f *finder) searchPackage(file string) (dpkg.Package, error) {
 	result, err := f.DI.Query.LookUp(file)
 	if err != nil {
 		return nil, err
@@ -90,11 +90,11 @@ func (f *finder) searchPackage(file string) (*dpkg.Package, error) {
 	return result, nil
 }
 
-func realpath(file string) (string, error) {
+func (f *finder) realpath(file string) (string, error) {
 	if !filepath.IsAbs(file) {
 		return "", errors.New("library path is not absolute: " + file)
 	}
-	stat, err := os.Stat(file)
+	stat, err := fs.Stat(f.FS, file)
 	if err != nil {
 		return "", err
 	}

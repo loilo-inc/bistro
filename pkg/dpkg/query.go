@@ -3,25 +3,27 @@ package dpkg
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io/fs"
+	"path"
 	"runtime"
+
+	"github.com/loilo-inc/bistro/pkg/util"
 )
 
 type Query interface {
-	Get(name string) (*Package, error)
-	List() ([]*Package, error)
+	Get(name string) (Package, error)
+	List() ([]Package, error)
 	Load() error
-	LookUp(file string) (*Package, error)
+	LookUp(file string) (Package, error)
 }
 
 type query struct {
-	baseDir string
 	// must be arm64/amd64
 	arch     string
-	packages []*Package
-	nameMap  map[string][]*Package
-	filesMap map[string]*Package
+	packages []*pkg
+	nameMap  util.Map[string, []*pkg]
+	filesMap util.Map[string, *pkg]
+	fs       fs.FS
 }
 
 var _ Query = &query{}
@@ -58,21 +60,16 @@ const (
 	SelectionUnknown   = "unknown"
 )
 
-func NewQuery() Query {
-	return NewQueryWithBaseDir(DefaultBaseDir)
+func NewQuery(fs fs.FS) Query {
+	return &query{arch: runtime.GOARCH, fs: fs}
 }
 
-// NewQueryWithBaseDir reads the dpkg database from baseDir.
-func NewQueryWithBaseDir(baseDir string) Query {
-	return &query{baseDir: baseDir, arch: runtime.GOARCH}
-}
-
-func (d *query) Get(name string) (*Package, error) {
-	if d.nameMap == nil {
+func (d *query) Get(name string) (Package, error) {
+	if d.packages == nil {
 		return nil, errors.New("packages not loaded")
 	}
-	list, ok := d.nameMap[name]
-	if !ok {
+	list := d.nameMap.Get(name)
+	if len(list) == 0 {
 		return nil, errors.New("package not found: " + name)
 	}
 	if len(list) == 1 {
@@ -86,40 +83,49 @@ func (d *query) Get(name string) (*Package, error) {
 	return list[0], nil
 }
 
-func (d *query) List() ([]*Package, error) {
-	if d.nameMap == nil {
+func (d *query) List() ([]Package, error) {
+	var list []Package
+	for _, pkg := range d.packages {
+		list = append(list, pkg)
+	}
+	return list, nil
+}
+
+func (d *query) list() ([]*pkg, error) {
+	if d.packages == nil {
 		return nil, errors.New("packages not loaded")
 	}
 	return d.packages, nil
 }
 
-func (q *query) LookUp(searchFile string) (*Package, error) {
-	if !filepath.IsAbs(searchFile) {
+func (q *query) LookUp(searchFile string) (Package, error) {
+	if !path.IsAbs(searchFile) {
 		return nil, fmt.Errorf("pattern must be an absolute path: %s", searchFile)
 	}
-	if q.filesMap != nil {
-		return q.filesMap[searchFile], nil
+	if cache, ok := q.filesMap.LookUp(searchFile); ok {
+		return cache, nil
 	}
-	packages, err := q.List()
+	packages, err := q.list()
 	if err != nil {
 		return nil, err
 	}
-	var filesMap = make(map[string]*Package)
 	for _, pkg := range packages {
 		files, err := pkg.ListFiles()
 		if err != nil {
 			return nil, err
 		}
 		for _, file := range files {
-			filesMap[file] = pkg
+			q.filesMap.Set(file, pkg)
 		}
 	}
-	q.filesMap = filesMap
-	return filesMap[searchFile], nil
+	if cache, ok := q.filesMap.LookUp(searchFile); ok {
+		return cache, nil
+	}
+	return nil, nil
 }
 
 func (d *query) Load() error {
-	content, err := os.ReadFile(filepath.Join(d.baseDir, "status"))
+	content, err := fs.ReadFile(d.fs, path.Join(DefaultBaseDir, "status"))
 	if err != nil {
 		return err
 	}
@@ -127,17 +133,17 @@ func (d *query) Load() error {
 	if err != nil {
 		return err
 	}
-	d.filesMap = nil
+	d.filesMap.Clear()
 	d.packages = pkgs
-	d.nameMap = make(map[string][]*Package)
+	d.nameMap.Clear()
 	for _, pkg := range pkgs {
-		pkg.baseDir = d.baseDir
+		pkg.fs = d.fs
 		name := pkg.Name()
 		arch := pkg.Architecture()
 		// forcely add arch to identify the package
 		nameWithArch := fmt.Sprintf("%s:%s", name, arch)
-		d.nameMap[name] = append(d.nameMap[name], pkg)
-		d.nameMap[nameWithArch] = append(d.nameMap[nameWithArch], pkg)
+		d.nameMap.Set(name, append(d.nameMap.Get(name), pkg))
+		d.nameMap.Set(nameWithArch, append(d.nameMap.Get(nameWithArch), pkg))
 	}
 	return nil
 }

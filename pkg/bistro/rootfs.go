@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
+	"io/fs"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -17,7 +18,7 @@ type RootFS interface {
 	// Copy copies the file or directory at the given absolute path into the root filesystem.
 	Copy(path string) error
 	// Add adds a file with the given content and mode to the root filesystem.
-	Add(path string, content []byte, mode os.FileMode) error
+	Add(path string, content []byte, mode fs.FileMode) error
 	// Close finalizes the root filesystem, writing any remaining data.
 	Close() error
 }
@@ -27,6 +28,7 @@ type rootFS struct {
 	resolving map[resolvingState]struct{}
 	spFilePat *regexp.Regexp
 	tw        *tar.Writer
+	fs        fs.FS
 }
 
 type resolvingState struct {
@@ -36,8 +38,9 @@ type resolvingState struct {
 
 var _ RootFS = &rootFS{}
 
-func NewRootFS(out io.Writer) RootFS {
+func NewRootFS(fs fs.FS, out io.Writer) RootFS {
 	return &rootFS{
+		fs:        fs,
 		tw:        tar.NewWriter(out),
 		copied:    make(map[string]struct{}),
 		resolving: make(map[resolvingState]struct{}),
@@ -66,7 +69,7 @@ func (r *rootFS) Copy(path string) error {
 	return nil
 }
 
-func (r *rootFS) Add(path string, content []byte, mode os.FileMode) error {
+func (r *rootFS) Add(path string, content []byte, mode fs.FileMode) error {
 	header := &tar.Header{
 		Name:    strings.TrimPrefix(filepath.ToSlash(path), "/"),
 		Mode:    int64(mode),
@@ -85,13 +88,13 @@ func (r *rootFS) Close() error {
 }
 
 func (r *rootFS) handleSubdir(path string, origPath string) (terminate bool, err error) {
-	lstat, err := os.Lstat(path)
+	lstat, err := fs.Lstat(r.fs, path)
 	if err != nil {
 		return false, err
 	}
-	isSymlink := lstat.Mode()&os.ModeSymlink != 0
+	isSymlink := lstat.Mode()&fs.ModeSymlink != 0
 	if isSymlink {
-		link, err := os.Readlink(path)
+		link, err := fs.ReadLink(r.fs, path)
 		if err != nil {
 			return false, err
 		}
@@ -108,10 +111,10 @@ func (r *rootFS) handleSubdir(path string, origPath string) (terminate bool, err
 	return false, r.copyOne(path, "", lstat)
 }
 
-func (r *rootFS) copyLink(path string, link string, remaining string) error {
-	state := resolvingState{path: path, remaining: remaining}
+func (r *rootFS) copyLink(vPath string, link string, remaining string) error {
+	state := resolvingState{path: vPath, remaining: remaining}
 	if _, ok := r.resolving[state]; ok {
-		return fmt.Errorf("circular symlink detected: %s -> %s", path, link)
+		return fmt.Errorf("circular symlink detected: %s -> %s", vPath, link)
 	}
 	if len(r.resolving) >= 256 {
 		return fmt.Errorf("too many symlinks being resolved")
@@ -121,17 +124,17 @@ func (r *rootFS) copyLink(path string, link string, remaining string) error {
 
 	target := link
 	if !filepath.IsAbs(target) {
-		target = filepath.Join(filepath.Dir(path), target)
+		target = path.Join(filepath.Dir(vPath), target)
 	}
 	target = filepath.Clean(target)
 	// terminate early for special file prefixes like /proc and /sys
 	if r.spFilePat.MatchString(target) {
 		return nil
 	}
-	return r.Copy(filepath.Join(target, remaining))
+	return r.Copy(path.Join(target, remaining))
 }
 
-func (r *rootFS) copyOne(path string, link string, lstat os.FileInfo) (err error) {
+func (r *rootFS) copyOne(path string, link string, lstat fs.FileInfo) (err error) {
 	defer func() {
 		if err == nil {
 			r.copied[path] = struct{}{}
@@ -155,7 +158,7 @@ func (r *rootFS) copyOne(path string, link string, lstat os.FileInfo) (err error
 	if !lstat.Mode().IsRegular() {
 		return nil
 	}
-	file, err := os.Open(path)
+	file, err := r.fs.Open(path)
 	if err != nil {
 		return err
 	}

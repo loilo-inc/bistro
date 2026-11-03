@@ -1,20 +1,34 @@
 package dpkg
 
 import (
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io/fs"
+	"path"
 	"strings"
 )
 
+type Package interface {
+	Name() string
+	NameWithArch() string
+	Version() string
+	Status() Status
+	Architecture() string
+	ListFiles() ([]string, error)
+	Md5Sums() (*Md5Sums, error)
+	String() string
+}
+
 // https://man7.org/linux/man-pages/man1/dpkg-query.1.html
-type Package struct {
-	baseDir   string
+type pkg struct {
 	fields    []*Field
 	fieldsMap map[string]*Field
 	list      *ListData
 	md5Sums   *Md5Sums
+	fs        fs.FS
 }
+
+var _ Package = (*pkg)(nil)
 
 type Field struct {
 	Key   string
@@ -42,27 +56,27 @@ type Checksum struct {
 	File string
 }
 
-func (p *Package) field(key string) string {
+func (p *pkg) field(key string) string {
 	if f, ok := p.fieldsMap[key]; ok {
 		return f.Value
 	}
 	return ""
 }
 
-func (p *Package) Name() string {
+func (p *pkg) Name() string {
 	return p.field("Package")
 }
 
 // NameWithArch returns the package name used for dpkg info files.
 // Only Multi-Arch: same packages use architecture-qualified filenames.
-func (p *Package) NameWithArch() string {
+func (p *pkg) NameWithArch() string {
 	if p.field("Multi-Arch") == "same" {
 		return p.Name() + ":" + p.Architecture()
 	}
 	return p.Name()
 }
 
-func (p *Package) Version() string {
+func (p *pkg) Version() string {
 	return p.field("Version")
 }
 
@@ -72,7 +86,7 @@ type Status struct {
 	Current string
 }
 
-func (p *Package) Status() Status {
+func (p *pkg) Status() Status {
 	// Example: install ok installed
 	parts := strings.Split(p.field("Status"), " ")
 	if len(parts) != 3 {
@@ -85,24 +99,20 @@ func (p *Package) Status() Status {
 	}
 }
 
-func (p *Package) Architecture() string {
+func (p *pkg) Architecture() string {
 	return p.field("Architecture")
 }
 
-func (p *Package) infoPath(extension string) string {
-	baseDir := p.baseDir
-	if baseDir == "" {
-		baseDir = DefaultBaseDir
-	}
-	return filepath.Join(baseDir, "info", p.NameWithArch()+extension)
+func (p *pkg) infoPath(extension string) string {
+	return path.Join(DefaultBaseDir, "info", p.NameWithArch()+extension)
 }
 
-func (p *Package) ListFiles() ([]string, error) {
+func (p *pkg) ListFiles() ([]string, error) {
 	if p.list == nil {
 		listFile := p.infoPath(".list")
-		content, err := os.ReadFile(listFile)
+		content, err := fs.ReadFile(p.fs, listFile)
 		// ignore non-exist error for various reasons (e.g., file removed)
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			p.list = &ListData{Files: []string{}}
 			return p.list.Files, nil
 		}
@@ -121,12 +131,11 @@ func (p *Package) ListFiles() ([]string, error) {
 	return p.list.Files, nil
 }
 
-func (p *Package) Md5Sums() (*Md5Sums, error) {
+func (p *pkg) Md5Sums() (*Md5Sums, error) {
 	if p.md5Sums == nil {
-		md5File := p.infoPath(".md5sums")
-		content, err := os.ReadFile(md5File)
+		content, err := fs.ReadFile(p.fs, p.infoPath(".md5sums"))
 		// .md5sums file might not exist
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			p.md5Sums = &Md5Sums{Entries: []Checksum{}}
 			return p.md5Sums, nil
 		} else if err != nil {
@@ -151,7 +160,7 @@ func (p *Package) Md5Sums() (*Md5Sums, error) {
 	return p.md5Sums, nil
 }
 
-func (p *Package) String() string {
+func (p *pkg) String() string {
 	var sb strings.Builder
 	for _, field := range p.fields {
 		fmt.Fprintf(&sb, "%s: %s\n", field.Key, field.Value)

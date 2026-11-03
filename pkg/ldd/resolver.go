@@ -1,7 +1,8 @@
 package ldd
 
 import (
-	"os"
+	"io/fs"
+	"path"
 	"path/filepath"
 	"runtime"
 
@@ -20,6 +21,7 @@ type resolver struct {
 	dstPlatform     string
 	elfCache        util.Map[string, *elfInfo]
 	ldSoCache       LdCache
+	fs              fs.FS
 }
 
 var _ Resolver = (*resolver)(nil)
@@ -32,20 +34,18 @@ type ResolverOptions struct {
 	DstPlatform string
 }
 
-func DefaultResolver() Resolver {
-	return NewResolver(ResolverOptions{
-		LdLibraryPath: os.Getenv("LD_LIBRARY_PATH"),
-		DstLib:        getDstLib(runtime.GOARCH),
-		DstPlatform:   getDstPlatform(runtime.GOARCH),
-	})
-}
-
-func NewResolver(input ResolverOptions) Resolver {
+func NewResolver(fs fs.FS, input ResolverOptions) Resolver {
+	if input.DstLib == "" {
+		input.DstLib = getDstLib(runtime.GOARCH)
+	}
+	if input.DstPlatform == "" {
+		input.DstPlatform = getDstPlatform(runtime.GOARCH)
+	}
 	var sysLibraryPath []string
 	if input.DstLib != "" {
 		sysLibraryPath = append(sysLibraryPath,
-			filepath.Join("/", input.DstLib),
-			filepath.Join("/usr", input.DstLib),
+			path.Join("", input.DstLib),
+			path.Join("usr", input.DstLib),
 		)
 	}
 	sysLibraryPath = append(sysLibraryPath, "/lib", "/usr/lib", "/lib64", "/usr/lib64")
@@ -54,6 +54,8 @@ func NewResolver(input ResolverOptions) Resolver {
 		sysLibraryPaths: sysLibraryPath,
 		dstLib:          input.DstLib,
 		dstPlatform:     input.DstPlatform,
+		ldSoCache:       NewLdCache(fs),
+		fs:              fs,
 	}
 }
 
