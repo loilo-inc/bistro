@@ -7,11 +7,13 @@ import (
 	"io"
 	"io/fs"
 	"path"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/loilo-inc/bistro/pkg/rootfs"
+	"github.com/loilo-inc/bistro/pkg/util"
 )
 
 type RootFS interface {
@@ -24,15 +26,15 @@ type RootFS interface {
 }
 
 type rootFS struct {
-	copied    map[string]struct{}
-	resolving map[resolvingState]struct{}
+	copied    util.Map[rootfs.Path, bool]
+	resolving util.Map[resolvingState, bool]
 	spFilePat *regexp.Regexp
 	tw        *tar.Writer
 	fs        fs.FS
 }
 
 type resolvingState struct {
-	path      string
+	path      rootfs.Path
 	remaining string
 }
 
@@ -42,25 +44,24 @@ func NewRootFS(fs fs.FS, out io.Writer) RootFS {
 	return &rootFS{
 		fs:        fs,
 		tw:        tar.NewWriter(out),
-		copied:    make(map[string]struct{}),
-		resolving: make(map[resolvingState]struct{}),
 		spFilePat: regexp.MustCompile(`^/(proc|sys)(/|$)`),
 	}
 }
 
-func (r *rootFS) Copy(path string) error {
-	if !filepath.IsAbs(path) {
+func (r *rootFS) Copy(file string) error {
+	if !path.IsAbs(file) {
 		return errors.New("path must be absolute")
 	}
-	var paths []string
-	for p := filepath.Clean(path); ; p = filepath.Dir(p) {
-		paths = append(paths, p)
-		if p == string(filepath.Separator) {
+	origPath := rootfs.NewPath(file)
+	var paths []rootfs.Path
+	for p := path.Clean(file); ; p = path.Dir(p) {
+		paths = append(paths, rootfs.NewPath(p))
+		if p == "/" {
 			break
 		}
 	}
 	for _, subdir := range slices.Backward(paths) {
-		if terminate, err := r.handleSubdir(subdir, path); err != nil {
+		if terminate, err := r.handleSubdir(subdir, origPath); err != nil {
 			return err
 		} else if terminate {
 			break
@@ -71,7 +72,7 @@ func (r *rootFS) Copy(path string) error {
 
 func (r *rootFS) Add(path string, content []byte, mode fs.FileMode) error {
 	header := &tar.Header{
-		Name:    strings.TrimPrefix(filepath.ToSlash(path), "/"),
+		Name:    rootfs.NewPath(path).TarName(),
 		Mode:    int64(mode),
 		Size:    int64(len(content)),
 		ModTime: time.Now(),
@@ -87,21 +88,21 @@ func (r *rootFS) Close() error {
 	return r.tw.Close()
 }
 
-func (r *rootFS) handleSubdir(path string, origPath string) (terminate bool, err error) {
-	lstat, err := fs.Lstat(r.fs, path)
+func (r *rootFS) handleSubdir(path rootfs.Path, origPath rootfs.Path) (terminate bool, err error) {
+	lstat, err := fs.Lstat(r.fs, path.Path())
 	if err != nil {
 		return false, err
 	}
 	isSymlink := lstat.Mode()&fs.ModeSymlink != 0
 	if isSymlink {
-		link, err := fs.ReadLink(r.fs, path)
+		link, err := fs.ReadLink(r.fs, path.Path())
 		if err != nil {
 			return false, err
 		}
 		if err := r.copyOne(path, link, lstat); err != nil {
 			return false, err
 		}
-		remaining, _ := filepath.Rel(path, origPath)
+		remaining := strings.TrimPrefix(origPath.Abs(), path.Abs())
 		if err := r.copyLink(path, link, remaining); err != nil {
 			return false, err
 		}
@@ -111,36 +112,37 @@ func (r *rootFS) handleSubdir(path string, origPath string) (terminate bool, err
 	return false, r.copyOne(path, "", lstat)
 }
 
-func (r *rootFS) copyLink(vPath string, link string, remaining string) error {
+func (r *rootFS) copyLink(vPath rootfs.Path, link string, remaining string) error {
 	state := resolvingState{path: vPath, remaining: remaining}
-	if _, ok := r.resolving[state]; ok {
+	if r.resolving.Has(state) {
 		return fmt.Errorf("circular symlink detected: %s -> %s", vPath, link)
 	}
-	if len(r.resolving) >= 256 {
+	if r.resolving.Size() >= 256 {
 		return fmt.Errorf("too many symlinks being resolved")
 	}
-	r.resolving[state] = struct{}{}
-	defer delete(r.resolving, state)
+	r.resolving.Set(state, true)
+	defer r.resolving.Delete(state)
 
-	target := link
-	if !filepath.IsAbs(target) {
-		target = path.Join(filepath.Dir(vPath), target)
+	var target rootfs.Path
+	if path.IsAbs(link) {
+		target = rootfs.NewPath(link)
+	} else {
+		target = vPath.Dir().Join(target.Path())
 	}
-	target = filepath.Clean(target)
 	// terminate early for special file prefixes like /proc and /sys
-	if r.spFilePat.MatchString(target) {
+	if r.spFilePat.MatchString(target.Abs()) {
 		return nil
 	}
-	return r.Copy(path.Join(target, remaining))
+	return r.Copy(target.Join(remaining).Abs())
 }
 
-func (r *rootFS) copyOne(path string, link string, lstat fs.FileInfo) (err error) {
+func (r *rootFS) copyOne(path rootfs.Path, link string, lstat fs.FileInfo) (err error) {
 	defer func() {
 		if err == nil {
-			r.copied[path] = struct{}{}
+			r.copied.Set(path, true)
 		}
 	}()
-	if _, ok := r.copied[path]; ok {
+	if r.copied.Has(path) {
 		return nil
 	}
 
@@ -148,17 +150,14 @@ func (r *rootFS) copyOne(path string, link string, lstat fs.FileInfo) (err error
 	if err != nil {
 		return err
 	}
-	header.Name = strings.TrimPrefix(filepath.ToSlash(path), "/")
-	if header.Name == "" {
-		header.Name = "."
-	}
+	header.Name = path.TarName()
 	if err := r.tw.WriteHeader(header); err != nil {
 		return err
 	}
 	if !lstat.Mode().IsRegular() {
 		return nil
 	}
-	file, err := r.fs.Open(path)
+	file, err := r.fs.Open(path.Path())
 	if err != nil {
 		return err
 	}

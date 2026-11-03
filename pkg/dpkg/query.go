@@ -7,6 +7,7 @@ import (
 	"path"
 	"runtime"
 
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/loilo-inc/bistro/pkg/util"
 )
 
@@ -33,7 +34,7 @@ type OwnedFile struct {
 	File    string
 }
 
-const DefaultBaseDir = "/var/lib/dpkg"
+const DefaultBaseDir = "var/lib/dpkg"
 
 // https://manpages.debian.org/testing/dpkg/dpkg.1.en.html#Package_states
 const (
@@ -125,7 +126,8 @@ func (q *query) LookUp(searchFile string) (Package, error) {
 }
 
 func (d *query) Load() error {
-	content, err := fs.ReadFile(d.fs, path.Join(DefaultBaseDir, "status"))
+	statusPath := rootfs.NewPath(path.Join(DefaultBaseDir, "status"))
+	content, err := fs.ReadFile(d.fs, statusPath.Path())
 	if err != nil {
 		return err
 	}
