@@ -84,7 +84,7 @@ func (r *resolver) ListObjects(file string) ([]*Library, error) {
 
 	ldLibraryPath := expandVars(r.ldLibraryPath, dstOrigin.Path(), r.dstLib, r.dstPlatform)
 	var ldLibraryPaths []rootfs.Path
-	for _, p := range strings.Split(ldLibraryPath, ":") {
+	for p := range strings.SplitSeq(ldLibraryPath, ":") {
 		ldLibraryPaths = append(ldLibraryPaths, rootfs.NewPath(p))
 	}
 

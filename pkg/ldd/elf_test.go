@@ -81,17 +81,16 @@ func TestCacheFlags(t *testing.T) {
 		{"unknown encoding", elf.EM_X86_64, elf.ELFCLASS64, elf.ELFDATANONE, 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got := (&elfInfo{FileHeader: elf.FileHeader{Machine: tt.machine, Class: tt.class, Data: tt.data}}).ldCacheABI()
+			got := (&elfInfo{Machine: tt.machine, Class: tt.class, Data: tt.data}).ldCacheABI()
 			require.Equal(t, tt.want, got)
 		})
 	}
 }
 
 func TestElfInfoVerify(t *testing.T) {
-	src := &elfInfo{FileHeader: elf.FileHeader{
+	src := &elfInfo{
 		Class: elf.ELFCLASS64, Data: elf.ELFDATA2LSB, Version: elf.EV_CURRENT,
-		OSABI: elf.ELFOSABI_NONE, Type: elf.ET_EXEC, Machine: elf.EM_X86_64,
-	}}
+		OSABI: elf.ELFOSABI_NONE, Type: elf.ET_EXEC, Machine: elf.EM_X86_64}
 	for _, tt := range []struct {
 		name    string
 		mutate  func(*elf.FileHeader)
