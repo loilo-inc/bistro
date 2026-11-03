@@ -1,4 +1,4 @@
-package bistro
+package rootfs
 
 import (
 	"archive/tar"

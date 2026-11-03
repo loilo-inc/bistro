@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 )
 
 type Baker interface {
@@ -51,7 +52,7 @@ func (b *baker) CreateRootFS(input BakeInput) (err error) {
 			os.Remove(tmpFile.Name())
 		}
 	}()
-	rootfs := NewRootFS(b.FS, tmpFile)
+	rootfs := rootfs.NewArchiver(b.FS, tmpFile)
 	for _, pkg := range input.DpkgList {
 		if err := b.writePackageMetadata(rootfs, pkg); err != nil {
 			return err
@@ -78,15 +79,15 @@ func (b *baker) CreateRootFS(input BakeInput) (err error) {
 // directory to store dpkg status used by distroless
 const DpkgStatusDir = "var/lib/dpkg/status.d"
 
-func (b *baker) writePackageMetadata(rootFS RootFS, pkg dpkg.Package) error {
-	if err := rootFS.Add(path.Join(DpkgStatusDir, pkg.Name()), []byte(pkg.String()), 0644); err != nil {
+func (b *baker) writePackageMetadata(archiver rootfs.Archiver, pkg dpkg.Package) error {
+	if err := archiver.Add(path.Join(DpkgStatusDir, pkg.Name()), []byte(pkg.String()), 0644); err != nil {
 		return err
 	}
 	md5sums, err := pkg.Md5Sums()
 	if err != nil {
 		return err
 	}
-	if err = rootFS.Add(path.Join(DpkgStatusDir, pkg.Name()+".md5sums"), []byte(md5sums.String()), 0644); err != nil {
+	if err = archiver.Add(path.Join(DpkgStatusDir, pkg.Name()+".md5sums"), []byte(md5sums.String()), 0644); err != nil {
 		return err
 	}
 	files, err := pkg.ListFiles()
@@ -95,7 +96,7 @@ func (b *baker) writePackageMetadata(rootFS RootFS, pkg dpkg.Package) error {
 	}
 
 	for _, srcPath := range files {
-		if err := rootFS.Copy(srcPath); errors.Is(err, fs.ErrNotExist) {
+		if err := archiver.Copy(srcPath); errors.Is(err, fs.ErrNotExist) {
 			b.Logger.Error("File does not exist: %s", srcPath)
 			continue
 		} else if err != nil {
