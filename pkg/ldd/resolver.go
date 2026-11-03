@@ -1,11 +1,13 @@
 package ldd
 
 import (
+	"fmt"
 	"io/fs"
 	"path"
-	"path/filepath"
 	"runtime"
+	"strings"
 
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/loilo-inc/bistro/pkg/util"
 )
 
@@ -16,10 +18,10 @@ type Resolver interface {
 
 type resolver struct {
 	ldLibraryPath   string
-	sysLibraryPaths []string
+	sysLibraryPaths []rootfs.Path
 	dstLib          string
 	dstPlatform     string
-	elfCache        util.Map[string, *elfInfo]
+	elfCache        util.Map[rootfs.Path, *elfInfo]
 	ldSoCache       LdCache
 	fs              fs.FS
 }
@@ -41,14 +43,19 @@ func NewResolver(fs fs.FS, input ResolverOptions) Resolver {
 	if input.DstPlatform == "" {
 		input.DstPlatform = getDstPlatform(runtime.GOARCH)
 	}
-	var sysLibraryPath []string
+	var sysLibraryPath []rootfs.Path
 	if input.DstLib != "" {
 		sysLibraryPath = append(sysLibraryPath,
-			path.Join("", input.DstLib),
-			path.Join("usr", input.DstLib),
+			rootfs.NewPath(path.Join("", input.DstLib)),
+			rootfs.NewPath(path.Join("usr", input.DstLib)),
 		)
 	}
-	sysLibraryPath = append(sysLibraryPath, "/lib", "/usr/lib", "/lib64", "/usr/lib64")
+	sysLibraryPath = append(sysLibraryPath,
+		rootfs.NewPath("/lib"),
+		rootfs.NewPath("/usr/lib"),
+		rootfs.NewPath("/lib64"),
+		rootfs.NewPath("/usr/lib64"),
+	)
 	return &resolver{
 		ldLibraryPath:   input.LdLibraryPath,
 		sysLibraryPaths: sysLibraryPath,
@@ -65,20 +72,28 @@ func (r *resolver) Load() error {
 
 type searchResult struct {
 	libs   []*Library
-	rPaths []string
+	rPaths []rootfs.Path
 }
 
-func (r *resolver) ListObjects(path string) ([]*Library, error) {
+func (r *resolver) ListObjects(file string) ([]*Library, error) {
+	if !path.IsAbs(file) {
+		return nil, fmt.Errorf("file path is not absolute: %s", file)
+	}
+	rootPath := rootfs.NewPath(file)
+	dstOrigin := rootPath.Dir()
 
-	ldLibraryPath := expandVars(r.ldLibraryPath, filepath.Dir(path), r.dstLib, r.dstPlatform)
-	ldLibraryPaths := filepath.SplitList(ldLibraryPath)
+	ldLibraryPath := expandVars(r.ldLibraryPath, dstOrigin.Path(), r.dstLib, r.dstPlatform)
+	var ldLibraryPaths []rootfs.Path
+	for _, p := range strings.Split(ldLibraryPath, ":") {
+		ldLibraryPaths = append(ldLibraryPaths, rootfs.NewPath(p))
+	}
 
 	rr := &rootResolver{
 		resolver:       r,
 		ldLibraryPaths: ldLibraryPaths,
 	}
 
-	rootDeps, err := rr.listObjects(path, nil)
+	rootDeps, err := rr.listObjects(rootPath, nil)
 	if err != nil {
 		return nil, err
 	}

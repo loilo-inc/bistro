@@ -7,26 +7,19 @@ import (
 	"io"
 	"path/filepath"
 	"regexp"
+
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 )
 
 type elfInfo struct {
 	elf.FileHeader
 	*elfPath
-	Path   string
+	Path   rootfs.Path
 	SONAME string
 	Needed []string
 }
 
-func readElf(path string, dstLib string, dstPlatform string) (*elfInfo, error) {
-	file, err := elf.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	return newElf(file, path, dstLib, dstPlatform)
-}
-
-func newElf(file *elf.File, path string, dstLib string, dstPlatform string) (*elfInfo, error) {
+func newElf(file *elf.File, path rootfs.Path, dstLib string, dstPlatform string) (*elfInfo, error) {
 
 	dynTable, err := readDynTable(file)
 	if err != nil {
@@ -56,19 +49,19 @@ func newElf(file *elf.File, path string, dstLib string, dstPlatform string) (*el
 
 type elfPath struct {
 	Origin     string
-	RPaths     []string
-	RunPaths   []string
+	RPaths     []rootfs.Path
+	RunPaths   []rootfs.Path
 	HasRunPath bool
 }
 
-func expandElfPaths(path string, dynTable map[elf.DynTag][]string, dstLib string, dstPlatform string) (*elfPath, error) {
-	var rPaths []string
-	var runPaths []string
+func expandElfPaths(path rootfs.Path, dynTable map[elf.DynTag][]string, dstLib string, dstPlatform string) (*elfPath, error) {
+	var rPaths []rootfs.Path
+	var runPaths []rootfs.Path
 
 	dtRPath := dynTable[elf.DT_RPATH]
 	dtRunPath := dynTable[elf.DT_RUNPATH]
 
-	origin := filepath.Dir(path)
+	origin := filepath.Dir(path.Path())
 	hasRunPath := len(dtRunPath) > 0
 
 	// only evalueate DT_RPATH if DT_RUNPATH is not present
@@ -76,14 +69,18 @@ func expandElfPaths(path string, dynTable map[elf.DynTag][]string, dstLib string
 		for _, p := range dtRPath {
 			exp := expandVars(p, origin, dstLib, dstPlatform)
 			paths := filepath.SplitList(exp)
-			rPaths = append(rPaths, paths...)
+			for _, p := range paths {
+				rPaths = append(rPaths, rootfs.NewPath(p))
+			}
 		}
 	}
 
 	for _, p := range dtRunPath {
 		exp := expandVars(p, origin, dstLib, dstPlatform)
 		paths := filepath.SplitList(exp)
-		runPaths = append(runPaths, paths...)
+		for _, p := range paths {
+			runPaths = append(runPaths, rootfs.NewPath(p))
+		}
 	}
 
 	return &elfPath{

@@ -8,6 +8,7 @@ import (
 	"github.com/loilo-inc/bistro/pkg/bistro"
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/ldd"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/urfave/cli/v3"
 )
 
@@ -30,13 +31,15 @@ func New(version, commit, date string) App {
 		LdLibraryPath: os.Getenv("LD_LIBRARY_PATH"),
 	})
 	query := dpkg.NewQuery(fs)
+	symLinkResolver := rootfs.NewSymLinkResolver(fs)
 	logger := bistro.NewLogger(os.Stdout, os.Stderr)
 	return &app{
 		DI: bistro.DI{
-			FS:     fs,
-			Query:  query,
-			Ldd:    ldd,
-			Logger: logger,
+			FS:      fs,
+			SymLink: symLinkResolver,
+			Query:   query,
+			Ldd:     ldd,
+			Logger:  logger,
 		},
 		version: version,
 		commit:  commit,

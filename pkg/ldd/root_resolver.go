@@ -3,28 +3,28 @@ package ldd
 import (
 	"debug/elf"
 	"fmt"
-	"path/filepath"
 
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/loilo-inc/bistro/pkg/util"
 )
 
 type rootResolver struct {
 	*resolver
-	ldLibraryPaths []string
+	ldLibraryPaths []rootfs.Path
 	// lib -> loaded library
 	loaded util.Map[string, *Library]
 	// path -> list of dependent libraries
-	graph util.Map[string, []*Library]
+	graph util.Map[rootfs.Path, []*Library]
 }
 
-func (r *rootResolver) listObjects(path string, parentRPaths []string) (*searchResult, error) {
+func (r *rootResolver) listObjects(path rootfs.Path, parentRPaths []rootfs.Path) (*searchResult, error) {
 
 	elfInfo, err := r.readElf(path)
 	if err != nil {
 		return nil, err
 	}
 
-	var rPaths []string
+	var rPaths []rootfs.Path
 	rPaths = append(rPaths, elfInfo.RPaths...)
 	rPaths = append(rPaths, parentRPaths...)
 
@@ -41,7 +41,7 @@ func (r *rootResolver) listObjects(path string, parentRPaths []string) (*searchR
 	return &searchResult{libs: results, rPaths: rPaths}, nil
 }
 
-func (r *rootResolver) findLibrary(origLib string, srcElf *elfInfo, rPaths []string) (*Library, error) {
+func (r *rootResolver) findLibrary(origLib string, srcElf *elfInfo, rPaths []rootfs.Path) (*Library, error) {
 
 	lib := expandVars(origLib, srcElf.Origin, r.dstLib, r.dstPlatform)
 
@@ -60,20 +60,14 @@ func (r *rootResolver) findLibrary(origLib string, srcElf *elfInfo, rPaths []str
 		return &Library{Name: lib}, nil
 	}
 
-	if absPath, err := filepath.Abs(resolvedPath); err != nil {
-		return nil, err
-	} else {
-		resolvedPath = absPath
-	}
-
-	libElf, err := r.readElf(resolvedPath)
+	libElf, err := r.readElf(*resolvedPath)
 	if err != nil {
 		return nil, err
 	}
 
 	found := &Library{
 		Name: lib,
-		Path: resolvedPath,
+		Path: *resolvedPath,
 	}
 
 	// doubly cache the library by both its requested name and SONAME (if available)
@@ -87,11 +81,11 @@ func (r *rootResolver) findLibrary(origLib string, srcElf *elfInfo, rPaths []str
 	return found, nil
 }
 
-func (r *rootResolver) readElf(path string) (*elfInfo, error) {
+func (r *rootResolver) readElf(path rootfs.Path) (*elfInfo, error) {
 	if cached, ok := r.elfCache.LookUp(path); ok {
 		return cached, nil
 	}
-	file, err := r.fs.Open(path)
+	file, err := r.fs.Open(path.Path())
 	if err != nil {
 		return nil, err
 	}
@@ -99,11 +93,11 @@ func (r *rootResolver) readElf(path string) (*elfInfo, error) {
 
 	elfFile, err := elf.NewFile(util.NewReaderAt(file))
 	if err != nil {
-		return nil, fmt.Errorf("[ldd/readElf] malformed ELF file: %s: %w", path, err)
+		return nil, fmt.Errorf("[ldd/readElf] malformed ELF file: %s: %w", path.Path(), err)
 	}
 	info, err := newElf(elfFile, path, r.dstLib, r.dstPlatform)
 	if err != nil {
-		return nil, fmt.Errorf("[ldd/readElf] malformed ELF file: %s: %w", path, err)
+		return nil, fmt.Errorf("[ldd/readElf] malformed ELF file: %s: %w", path.Path(), err)
 	}
 	r.elfCache.Set(path, info)
 	return info, nil
