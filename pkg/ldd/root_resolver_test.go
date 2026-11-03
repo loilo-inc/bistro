@@ -167,7 +167,7 @@ func TestResolverNeededVariablesReuseLoadedLibrary(t *testing.T) {
 		"expand DT_NEEDED before consulting the loaded-library cache")
 }
 
-func TestReadElfCache(t *testing.T) {
+func TestRootResolverReadElfCache(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lib.so")
 	elftest.WriteDynamic(t, path)
 	r := &rootResolver{resolver: NewResolver(os.DirFS("/"), ResolverOptions{}).(*resolver)}

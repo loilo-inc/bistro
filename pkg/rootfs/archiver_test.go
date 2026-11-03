@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,7 +63,7 @@ func rootFSArchiveName(name string) string {
 	return strings.TrimPrefix(filepath.ToSlash(name), "/")
 }
 
-func TestRootFSAdd(t *testing.T) {
+func TestArchiverAdd(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
 		path    string
@@ -108,7 +110,7 @@ func (w rootFSContentFailWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func TestRootFSAddWriteErrors(t *testing.T) {
+func TestArchiverAddWriteErrors(t *testing.T) {
 	want := errors.New("write failed")
 	content := []byte("file content")
 	for _, tt := range []struct {
@@ -125,7 +127,7 @@ func TestRootFSAddWriteErrors(t *testing.T) {
 	}
 }
 
-func TestRootFSFilesAndDirectories(t *testing.T) {
+func TestArchiverFilesAndDirectories(t *testing.T) {
 	dir := rootFSTempDir(t)
 	first := filepath.Join(dir, "bin", "tool")
 	second := filepath.Join(dir, "share", "tool")
@@ -161,7 +163,7 @@ func TestRootFSFilesAndDirectories(t *testing.T) {
 	assert.Equal(t, byte(tar.TypeDir), entries["."].header.Typeflag)
 }
 
-func TestRootFSSymlinks(t *testing.T) {
+func TestArchiverSymlinks(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
 		directory bool
@@ -229,7 +231,7 @@ func TestRootFSSymlinks(t *testing.T) {
 	}
 }
 
-func TestRootFSSpecialFilePattern(t *testing.T) {
+func TestArchiverSpecialFilePattern(t *testing.T) {
 	pat := NewArchiver(os.DirFS("/"), io.Discard).(*archiver).spFilePat
 	for _, name := range []string{"/proc", "/proc/self/fd/1", "/sys", "/sys/class/net"} {
 		assert.True(t, pat.MatchString(name), name)
@@ -239,7 +241,7 @@ func TestRootFSSpecialFilePattern(t *testing.T) {
 	}
 }
 
-func TestRootFSStopsAtSpecialFileSymlinks(t *testing.T) {
+func TestArchiverStopsAtSpecialFileSymlinks(t *testing.T) {
 	dir := rootFSTempDir(t)
 	// /proc/self/fd/1 may point to a non-path target such as "pipe:[1]".
 	special := filepath.Join(dir, "proc", "self", "fd", "1")
@@ -285,14 +287,14 @@ func TestRootFSStopsAtSpecialFileSymlinks(t *testing.T) {
 	assert.Equal(t, "not special", entries[rootFSArchiveName(file)].body)
 }
 
-func TestRootFSRejectsInvalidPaths(t *testing.T) {
+func TestArchiverRejectsInvalidPaths(t *testing.T) {
 	root := NewArchiver(os.DirFS("/"), io.Discard)
 	assert.EqualError(t, root.Copy("relative/file"), "path must be absolute")
 	assert.ErrorIs(t, root.Copy(filepath.Join(rootFSTempDir(t), "missing")), os.ErrNotExist)
 	require.NoError(t, root.Close())
 }
 
-func TestRootFSRepeatedSymlink(t *testing.T) {
+func TestArchiverRepeatedSymlink(t *testing.T) {
 	dir := rootFSTempDir(t)
 	file := filepath.Join(dir, "file")
 	link := filepath.Join(dir, "selfdir")
@@ -317,7 +319,7 @@ func TestRootFSRepeatedSymlink(t *testing.T) {
 	}
 }
 
-func TestRootFSCircularSymlinks(t *testing.T) {
+func TestArchiverCircularSymlinks(t *testing.T) {
 	for _, tt := range []struct {
 		name, target, wantErr string
 	}{
@@ -354,7 +356,7 @@ func (w *rootFSFailWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func TestRootFSWriteErrors(t *testing.T) {
+func TestArchiverWriteErrors(t *testing.T) {
 	want := errors.New("write failed")
 	t.Run("Copy", func(t *testing.T) {
 		root := NewArchiver(os.DirFS("/"), &rootFSFailWriter{err: want})
@@ -369,4 +371,22 @@ func TestRootFSWriteErrors(t *testing.T) {
 		writer.err = want
 		assert.ErrorIs(t, root.Close(), want)
 	})
+}
+
+func TestArchiverCopiesFromInjectedFS(t *testing.T) {
+	files := fstest.MapFS{
+		"etc/app":        {Mode: fs.ModeDir | 0750},
+		"etc/app/config": {Data: []byte("enabled=true\n"), Mode: 0640},
+	}
+	var out bytes.Buffer
+	archive := NewArchiver(files, &out)
+	require.NoError(t, archive.Copy("/etc/app/config"))
+	require.NoError(t, archive.Copy("/etc/app/config"))
+	require.NoError(t, archive.Close())
+	entries := readRootFSTar(t, out.Bytes())
+	require.Len(t, entries, 4)
+	require.Equal(t, byte(tar.TypeDir), entries["etc/app"].header.Typeflag)
+	require.Equal(t, int64(0750), entries["etc/app"].header.Mode)
+	require.Equal(t, "enabled=true\n", entries["etc/app/config"].body)
+	require.Equal(t, int64(0640), entries["etc/app/config"].header.Mode)
 }

@@ -101,3 +101,39 @@ func TestSymLinkResolverVisitRetriesCallbackFailure(t *testing.T) {
 	require.NoError(t, resolver.Visit(NewPath("/file"), nil, callback))
 	require.Equal(t, 2, calls)
 }
+
+func TestSymLinkResolverVisitFollowsCanonicalPath(t *testing.T) {
+	root := t.TempDir()
+	writeRootFSFile(t, filepath.Join(root, "usr/bin/tool"), "tool", 0755)
+	require.NoError(t, os.Symlink("usr/bin", filepath.Join(root, "bin")))
+	resolver := NewSymLinkResolver(os.DirFS(root))
+	for range 2 {
+		var visited []string
+		var links []string
+		err := resolver.Visit(NewPath("/bin/tool"), nil, func(p Path, link string, info fs.FileInfo) error {
+			visited = append(visited, p.Abs())
+			if info.Mode()&fs.ModeSymlink != 0 {
+				links = append(links, link)
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		require.Equal(t, []string{"/", "/bin", "/", "/usr", "/usr/bin", "/usr/bin/tool"}, visited)
+		require.Equal(t, []string{"usr/bin"}, links)
+	}
+}
+
+func TestSymLinkResolverVisitSkipsInitialPath(t *testing.T) {
+	resolver := NewSymLinkResolver(os.DirFS(t.TempDir()))
+	starts := 0
+	err := resolver.Visit(NewPath("/missing"), func(p Path) bool {
+		starts++
+		require.Equal(t, "/missing", p.Abs())
+		return false
+	}, func(Path, string, fs.FileInfo) error {
+		t.Fatal("a skipped path must not be visited")
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, starts)
+}

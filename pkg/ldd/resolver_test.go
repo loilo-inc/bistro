@@ -2,10 +2,12 @@ package ldd
 
 import (
 	"debug/elf"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"testing/fstest"
 
 	"github.com/loilo-inc/bistro/pkg/internal/elftest"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
@@ -124,5 +126,40 @@ func TestResolverLibraryPathVariables(t *testing.T) {
 		require.Len(t, libs, 1)
 		require.Len(t, libs[0].Deps, 1)
 		require.Equal(t, leaf, libs[0].Deps[0].Path.Abs())
+	}
+}
+
+func TestResolverLoadsCacheFromInjectedFS(t *testing.T) {
+	files := fstest.MapFS{
+		"app":                     {Data: (elftest.Fixture{Entries: elftest.Needed("libcustom.so")}).Bytes()},
+		"opt/custom/libcustom.so": {Data: (elftest.Fixture{}).Bytes()},
+		"etc/ld.so.cache":         {Data: cacheFixture(cacheRecord{"libcustom.so", "/opt/custom/libcustom.so", 0x303})},
+	}
+	r := NewResolver(files, ResolverOptions{})
+	require.NoError(t, r.Load())
+	libs, err := r.ListObjects("/app")
+	require.NoError(t, err)
+	require.Len(t, libs, 1)
+	require.False(t, libs[0].IsBroken())
+	require.Equal(t, "/opt/custom/libcustom.so", libs[0].Path.Abs())
+	require.Empty(t, libs[0].Deps)
+	for _, path := range []string{"", "app", "./app"} {
+		_, err := r.ListObjects(path)
+		require.ErrorContains(t, err, "file path is not absolute")
+	}
+}
+
+func TestResolverLoadsMissingOrMalformedCache(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		files   fstest.MapFS
+		wantErr error
+	}{
+		{"missing", fstest.MapFS{}, nil},
+		{"malformed", fstest.MapFS{"etc/ld.so.cache": {Data: []byte("invalid")}}, io.ErrUnexpectedEOF},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.ErrorIs(t, NewResolver(tc.files, ResolverOptions{}).Load(), tc.wantErr)
+		})
 	}
 }

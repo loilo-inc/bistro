@@ -2,6 +2,7 @@ package bistro
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -124,4 +125,42 @@ func TestFinderUnownedLibrary(t *testing.T) {
 	require.Len(t, result.Dependencies, 1)
 	assert.Same(t, library, result.Dependencies[0].Library)
 	assert.Nil(t, result.Dependencies[0].Package)
+}
+
+func TestFinderPackageOwnershipUsesInjectedRoot(t *testing.T) {
+	root := t.TempDir()
+	writeRootFSFile(t, filepath.Join(root, "usr/bin/tool"), "tool", 0755)
+	writeRootFSFile(t, filepath.Join(root, "usr/bin/unowned"), "unowned", 0755)
+	require.NoError(t, os.Symlink("usr/bin", filepath.Join(root, "bin")))
+	require.NoError(t, os.Symlink("tool", filepath.Join(root, "usr/bin/alias")))
+	require.NoError(t, os.Symlink("missing", filepath.Join(root, "broken")))
+	writeRootFSFile(t, filepath.Join(root, "var/lib/dpkg/status"), "Package: example\nArchitecture: all\nStatus: install ok installed\n", 0644)
+	writeRootFSFile(t, filepath.Join(root, "var/lib/dpkg/info/example.list"), "/usr/bin/tool\n", 0644)
+	files := os.DirFS(root)
+	query := dpkg.NewQuery(files)
+	require.NoError(t, query.Load())
+	finder := NewFinder(DI{FS: files, Query: query, SymLink: rootfs.NewSymLinkResolver(files)})
+	for _, name := range []string{"/usr/bin/tool", "/bin/tool", "/usr/bin/alias", "/bin/alias"} {
+		t.Run(name, func(t *testing.T) {
+			pkg, err := finder.FindPackageForExecutable(name)
+			require.NoError(t, err)
+			require.Equal(t, "example", pkg.Name())
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		want error
+	}{
+		{"/usr/bin/unowned", errPackageNotFound},
+		{"/missing", fs.ErrNotExist},
+		{"/broken", fs.ErrNotExist},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pkg, err := finder.FindPackageForExecutable(tc.name)
+			require.ErrorIs(t, err, tc.want)
+			require.Nil(t, pkg)
+		})
+	}
+	_, err := finder.FindPackageForExecutable("usr/bin/tool")
+	require.ErrorContains(t, err, "file path is not absolute")
 }
