@@ -158,7 +158,7 @@ func readInterp(f *elf.File) (string, error) {
 			if len(data) == 0 || data[len(data)-1] != 0 {
 				return "", fmt.Errorf("[ldd/readInterp] unterminated interpreter string")
 			}
-			return string(data[:len(data)-1]), nil
+			return string(data[:bytes.IndexByte(data, 0)]), nil
 		}
 	}
 	return "", nil

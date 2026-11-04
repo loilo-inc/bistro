@@ -63,6 +63,27 @@ func TestReadElf(t *testing.T) {
 	require.Equal(t, rootfs.MustPaths(filepath.Dir(path)), info.RPaths)
 }
 
+func TestReadInterp(t *testing.T) {
+	for _, tt := range []struct {
+		name, interp, want string
+	}{
+		{"absent", "", ""},
+		{"pathname", "/lib/ld.so", "/lib/ld.so"},
+		{"NUL padding", "/lib/ld.so\x00\x00", "/lib/ld.so"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "app")
+			elftest.Write(t, path, elftest.Fixture{Type: elf.ET_EXEC, Interp: tt.interp})
+			file, err := elf.Open(path)
+			require.NoError(t, err)
+			defer file.Close()
+			got, err := readInterp(file)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestCacheFlags(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
