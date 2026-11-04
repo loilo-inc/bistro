@@ -33,6 +33,8 @@ The scan result shows that:
 
 `bundle` bundles one or more ELF executables and their dependencies into a single rootfs tarball.
 
+The `base-files` package is always included. It provides `/etc/debian_version` and `/etc/os-release` so that vulnerability scanners can detect the OS, and the basic filesystem layout (e.g. `/tmp`).
+
 ```bash
 bistro bundle -o ./python3.rootfs.tar /usr/bin/python3
 ```
