@@ -47,6 +47,6 @@ func testResolver(t *testing.T, options ResolverOptions, records ...cacheRecord)
 }
 
 func withSysLibraryPaths(r *resolver, paths ...string) *resolver {
-	r.sysLibraryPaths = rootfs.Paths(paths...)
+	r.sysLibraryPaths = rootfs.MustPaths(paths...)
 	return r
 }

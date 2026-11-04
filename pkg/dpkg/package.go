@@ -116,7 +116,12 @@ func (p *Package) ListFiles() ([]rootfs.Path, error) {
 			if f == "" {
 				continue
 			}
-			files = append(files, rootfs.NewPath(f))
+			// File path in the .list file is untrusted, must be validated.
+			if p, err := rootfs.NewPath(f); err != nil {
+				return nil, err
+			} else {
+				files = append(files, p)
+			}
 		}
 		p.list = &ListData{Files: files}
 	}

@@ -65,11 +65,15 @@ func (p *pathResolver) resolveLibraryPath(paths []rootfs.Path) (*rootfs.Path, bo
 }
 
 func (p *pathResolver) lookupLdCache() (*rootfs.Path, bool, error) {
-	path, found := p.ldSoCache.ResolveLibrary(p.targetLib, p.srcElf.ldCacheABI())
+	libPath, found := p.ldSoCache.ResolveLibrary(p.targetLib, p.srcElf.ldCacheABI())
 	if !found {
 		return nil, false, nil
 	}
-	return p.resolvePath(rootfs.Paths(path))
+	path, err := rootfs.NewPath(libPath)
+	if err != nil {
+		return nil, false, err
+	}
+	return p.resolvePath([]rootfs.Path{path})
 }
 
 func (p *pathResolver) resolvePath(paths []rootfs.Path) (*rootfs.Path, bool, error) {

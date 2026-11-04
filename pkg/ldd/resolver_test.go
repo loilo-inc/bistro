@@ -22,7 +22,7 @@ func TestResolverBreadthFirst(t *testing.T) {
 	elftest.WriteDynamic(t, filepath.Join(a, "C.so"), elftest.DynString(elf.DT_NEEDED, "leaf.so"), elftest.DynString(elf.DT_RUNPATH, c))
 	elftest.WriteDynamic(t, filepath.Join(b, "leaf.so"))
 	elftest.WriteDynamic(t, filepath.Join(c, "leaf.so"))
-	libs, err := testResolver(t, ResolverOptions{}).ListObjects(rootfs.NewPath(root))
+	libs, err := testResolver(t, ResolverOptions{}).ListObjects(rootfs.MustPath(root))
 	require.NoError(t, err)
 	require.Len(t, libs, 2)
 	require.Len(t, libs[0].Deps, 1)
@@ -39,7 +39,7 @@ func TestResolverCycle(t *testing.T) {
 	elftest.WriteDynamic(t, root, elftest.DynString(elf.DT_NEEDED, "A.so"), elftest.DynString(elf.DT_RUNPATH, dir))
 	elftest.WriteDynamic(t, filepath.Join(dir, "A.so"), elftest.DynString(elf.DT_NEEDED, "B.so"), elftest.DynString(elf.DT_RUNPATH, dir))
 	elftest.WriteDynamic(t, filepath.Join(dir, "B.so"), elftest.DynString(elf.DT_NEEDED, "A.so"), elftest.DynString(elf.DT_RUNPATH, dir))
-	libs, err := testResolver(t, ResolverOptions{}).ListObjects(rootfs.NewPath(root))
+	libs, err := testResolver(t, ResolverOptions{}).ListObjects(rootfs.MustPath(root))
 	require.NoError(t, err)
 	require.Len(t, libs, 1)
 	require.Len(t, libs[0].Deps, 1)
@@ -57,7 +57,7 @@ func TestResolverRootIsolation(t *testing.T) {
 		leaf := filepath.Join(dir, name, "leaf.so")
 		elftest.WriteDynamic(t, root, elftest.DynString(elf.DT_NEEDED, "mid.so"), elftest.DynString(elf.DT_RPATH, "$ORIGIN"))
 		elftest.WriteDynamic(t, leaf)
-		libs, err := r.ListObjects(rootfs.NewPath(root))
+		libs, err := r.ListObjects(rootfs.MustPath(root))
 		require.NoError(t, err)
 		require.Len(t, libs, 1)
 		require.Len(t, libs[0].Deps, 1)
@@ -69,27 +69,27 @@ func TestResolverErrorsAndNoDependencies(t *testing.T) {
 	r := testResolver(t, ResolverOptions{})
 	dir := t.TempDir()
 	root := filepath.Join(dir, "app")
-	_, err := r.ListObjects(rootfs.NewPath(root))
+	_, err := r.ListObjects(rootfs.MustPath(root))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	elftest.WriteNotELF(t, root)
-	_, err = r.ListObjects(rootfs.NewPath(root))
+	_, err = r.ListObjects(rootfs.MustPath(root))
 	require.ErrorContains(t, err, "[ldd/readElf] malformed ELF file: "+root+": ")
 	var formatErr *elf.FormatError
 	require.ErrorAs(t, err, &formatErr)
 	elftest.WriteDynamic(t, root)
-	libs, err := r.ListObjects(rootfs.NewPath(root))
+	libs, err := r.ListObjects(rootfs.MustPath(root))
 	require.NoError(t, err)
 	require.Empty(t, libs)
 }
 
 func TestNewResolverSystemPaths(t *testing.T) {
 	r := NewResolver("/", ResolverOptions{DstLib: "lib/x86_64-linux-gnu"}).(*resolver)
-	require.Equal(t, rootfs.Paths("/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu",
+	require.Equal(t, rootfs.MustPaths("/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu",
 		"/lib", "/usr/lib", "/lib64", "/usr/lib64"), r.sysLibraryPaths)
 	r = NewResolver("/", ResolverOptions{}).(*resolver)
-	want := rootfs.Paths("/lib", "/usr/lib", "/lib64", "/usr/lib64")
+	want := rootfs.MustPaths("/lib", "/usr/lib", "/lib64", "/usr/lib64")
 	if lib := getDstLib(runtime.GOARCH); lib != "" {
-		want = append(rootfs.Paths("/"+lib, "/usr/"+lib), want...)
+		want = append(rootfs.MustPaths("/"+lib, "/usr/"+lib), want...)
 	}
 	require.Equal(t, want, r.sysLibraryPaths)
 }
@@ -121,7 +121,7 @@ func TestResolverLibraryPathVariables(t *testing.T) {
 		leaf := filepath.Join(rootDir, "libs", "x86_64", "leaf.so")
 		elftest.WriteDynamic(t, root, elftest.Needed(mid)...)
 		elftest.WriteDynamic(t, leaf)
-		libs, err := r.ListObjects(rootfs.NewPath(root))
+		libs, err := r.ListObjects(rootfs.MustPath(root))
 		require.NoError(t, err)
 		require.Len(t, libs, 1)
 		require.Len(t, libs[0].Deps, 1)

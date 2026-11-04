@@ -52,9 +52,9 @@ func NewResolver(cwd string, input ResolverOptions) Resolver {
 		"/lib", "/usr/lib", "/lib64", "/usr/lib64",
 	)
 	return &resolver{
-		cwd:             rootfs.NewPath(cwd),
+		cwd:             rootfs.MustPath(cwd),
 		ldLibraryPath:   input.LdLibraryPath,
-		sysLibraryPaths: rootfs.Paths(sysLibraryPath...),
+		sysLibraryPaths: rootfs.MustPaths(sysLibraryPath...),
 		dstLib:          input.DstLib,
 		dstPlatform:     input.DstPlatform,
 	}

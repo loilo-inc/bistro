@@ -172,7 +172,7 @@ func (c *runner) absPath(p string) string {
 func (c *runner) rootfsPaths(paths ...string) []rootfs.Path {
 	var result []rootfs.Path
 	for _, p := range paths {
-		result = append(result, rootfs.NewPath(c.absPath(p)))
+		result = append(result, rootfs.MustPath(c.absPath(p)))
 	}
 	return result
 }

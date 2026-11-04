@@ -1,6 +1,7 @@
 package rootfs
 
 import (
+	"fmt"
 	"path"
 	"strings"
 )
@@ -9,18 +10,41 @@ type Path struct {
 	value string
 }
 
-func NewPath(value string) Path {
+func NewPath(value string) (Path, error) {
+	value = path.Clean(value)
+	if value == ".." || strings.HasPrefix(value, "../") {
+		return Path{}, fmt.Errorf("path cannot start with '..': %s", value)
+	}
 	if path.IsAbs(value) {
 		value = path.Join("./", value)
 	}
-	value = path.Clean(value)
-	return Path{value: value}
+	return Path{value: value}, nil
 }
 
-func Paths(paths ...string) []Path {
+func MustPath(value string) Path {
+	p, err := NewPath(value)
+	if err != nil {
+		panic(err)
+	}
+	return p
+}
+
+func Paths(paths ...string) ([]Path, error) {
 	var result []Path
 	for _, p := range paths {
-		result = append(result, NewPath(p))
+		pp, err := NewPath(p)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, pp)
+	}
+	return result, nil
+}
+
+func MustPaths(paths ...string) []Path {
+	var result []Path
+	for _, p := range paths {
+		result = append(result, MustPath(p))
 	}
 	return result
 }
@@ -41,18 +65,18 @@ func (p Path) Path() string {
 }
 
 func (p Path) Dir() Path {
-	return NewPath(path.Dir(p.value))
+	return MustPath(path.Dir(p.value))
 }
 
 func (p Path) Join(elem string) Path {
-	return NewPath(path.Join(p.value, elem))
+	return MustPath(path.Join(p.value, elem))
 }
 
 func (p Path) Resolve(target string) Path {
 	if path.IsAbs(target) {
-		return NewPath(target)
+		return MustPath(target)
 	}
-	return NewPath(path.Join(p.Abs(), target))
+	return MustPath(path.Join(p.Abs(), target))
 }
 
 func (p Path) Abs() string {

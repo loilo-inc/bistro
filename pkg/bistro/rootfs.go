@@ -120,9 +120,15 @@ func (r *rootFS) copyLink(file rootfs.Path, link string, remaining string) error
 
 	var target rootfs.Path
 	if path.IsAbs(link) {
-		target = rootfs.NewPath(link)
+		target = rootfs.MustPath(link)
 	} else {
-		target = file.Dir().Join(link)
+		// prohibit symlink to outside of the root filesystem
+		untrusted := path.Join(file.Dir().Path(), link)
+		v, err := rootfs.NewPath(untrusted)
+		if err != nil {
+			return err
+		}
+		target = v
 	}
 	// terminate early for special file prefixes like /proc and /sys
 	if r.spFilePat.MatchString(target.Abs()) {

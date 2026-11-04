@@ -24,7 +24,7 @@ func TestBakerCreatesArchive(t *testing.T) {
 	d := packageFilesStub(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {owned}})
 	out := filepath.Join(dir, "rootfs.tar")
 	writeRootFSFile(t, out, "previous archive", 0644)
-	err := NewBaker(DI{Query: d}).CreateRootFS(&BakeInput{Out: out, DpkgList: []*dpkg.Package{pkg}, Files: rootfs.Paths(explicit, owned, explicit)})
+	err := NewBaker(DI{Query: d}).CreateRootFS(&BakeInput{Out: out, DpkgList: []*dpkg.Package{pkg}, Files: rootfs.MustPaths(explicit, owned, explicit)})
 	require.NoError(t, err)
 	entries := readBundleTar(t, out)
 	assert.Equal(t, "package data", entries[rootFSArchiveName(owned)].body)
@@ -90,7 +90,7 @@ func TestBakerFailurePreservesOutputAndRemovesTemporaryFile(t *testing.T) {
 			}
 			input := &BakeInput{Out: out, DpkgList: []*dpkg.Package{pkg}}
 			if stage == "explicit file" {
-				input.Files = rootfs.Paths(filepath.Join(dir, "missing"))
+				input.Files = rootfs.MustPaths(filepath.Join(dir, "missing"))
 			}
 			err := NewBaker(DI{Query: d}).CreateRootFS(input)
 			switch stage {
