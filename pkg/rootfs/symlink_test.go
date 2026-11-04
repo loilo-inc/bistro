@@ -95,7 +95,7 @@ func TestSymlinkTargetDirectorySuffix(t *testing.T) {
 
 func TestRealPathSymlinkLimit(t *testing.T) {
 	fss := fstest.MapFS{}
-	for i := 0; i < 257; i++ {
+	for i := range 257 {
 		fss[fmt.Sprintf("link%d", i)] = &fstest.MapFile{Mode: fs.ModeSymlink | 0777, Data: []byte(fmt.Sprintf("link%d", i+1))}
 	}
 	fss["link257"] = &fstest.MapFile{Mode: 0644}

@@ -72,8 +72,8 @@ func (l *ldCache) readString(offset uint32) string {
 		return ""
 	}
 	b := l.data[offset:]
-	if i := bytes.IndexByte(b, 0); i >= 0 {
-		return string(b[:i])
+	if before, _, ok := bytes.Cut(b, []byte{0}); ok {
+		return string(before)
 	}
 	return ""
 }
