@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/loilo-inc/bistro/pkg/internal/elftest"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,9 +37,9 @@ func TestReadElf(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "libfoo.so")
 			entries := append(elftest.Needed("libone.so", "libtwo.so"), elftest.DynString(elf.DT_SONAME, "libfoo.so"), elftest.DynString(elf.DT_RPATH, "$PLATFORM/ignored"), elftest.DynString(elf.DT_RUNPATH, runpath))
 			elftest.WriteDynamic(t, path, entries...)
-			info, err := readElf(path, "lib", "")
+			info, err := (&resolver{}).readElf(rootfs.MustPath(path), "lib", "")
 			require.NoError(t, err)
-			require.Equal(t, path, info.Path)
+			require.Equal(t, path, info.Path.Abs())
 			require.Equal(t, kABIFlagX86_64_Glibc6, info.ldCacheABI())
 			require.Equal(t, "libfoo.so", info.SONAME)
 			require.Equal(t, []string{"libone.so", "libtwo.so"}, info.Needed)
@@ -47,18 +48,18 @@ func TestReadElf(t *testing.T) {
 			if runpath == "" {
 				require.Empty(t, info.RunPaths)
 			} else {
-				require.Equal(t, []string{filepath.Join(filepath.Dir(path), "run")}, info.RunPaths)
+				require.Equal(t, rootfs.MustPaths(filepath.Join(filepath.Dir(path), "run")), info.RunPaths)
 			}
 		})
 	}
 	path := filepath.Join(t.TempDir(), "plain.so")
 	elftest.WriteDynamic(t, path, elftest.DynString(elf.DT_RPATH, "$ORIGIN"))
-	info, err := readElf(path, "lib", "")
+	info, err := (&resolver{}).readElf(rootfs.MustPath(path), "lib", "")
 	require.NoError(t, err)
 	require.Empty(t, info.SONAME)
 	require.Empty(t, info.Needed)
 	require.False(t, info.HasRunPath)
-	require.Equal(t, []string{filepath.Dir(path)}, info.RPaths)
+	require.Equal(t, rootfs.MustPaths(filepath.Dir(path)), info.RPaths)
 }
 
 func TestCacheFlags(t *testing.T) {
@@ -112,7 +113,7 @@ func TestElfInfoVerify(t *testing.T) {
 			header := src.FileHeader
 			header.Type = elf.ET_DYN
 			tt.mutate(&header)
-			ok, err := src.verify(&elfInfo{FileHeader: header, Path: "/lib/target.so"})
+			ok, err := src.verify(&elfInfo{FileHeader: header, Path: rootfs.MustPath("/lib/target.so")})
 			require.Equal(t, tt.ok, ok)
 			if tt.wantErr != "" {
 				require.EqualError(t, err, "[ldd/verify] "+tt.wantErr+" for target: /lib/target.so")
@@ -132,19 +133,19 @@ func TestReadElfWithoutSectionHeaders(t *testing.T) {
 		elftest.DynString(elf.DT_RPATH, "/rpath"),
 		elftest.DynString(elf.DT_NEEDED, "libtwo.so"),
 	}})
-	info, err := readElf(path, "lib", "")
+	info, err := (&resolver{}).readElf(rootfs.MustPath(path), "lib", "")
 	require.NoError(t, err)
 	require.Equal(t, []string{"libone.so", "libtwo.so"}, info.Needed)
 	require.Equal(t, "libfoo.so", info.SONAME)
-	require.Equal(t, []string{"/rpath"}, info.RPaths)
+	require.Equal(t, rootfs.MustPaths("/rpath"), info.RPaths)
 
 	elftest.Write(t, path, elftest.Fixture{Header: noSections, Entries: []elftest.Dyn{
 		elftest.DynString(elf.DT_RUNPATH, "/runpath"),
 	}})
-	info, err = readElf(path, "lib", "")
+	info, err = (&resolver{}).readElf(rootfs.MustPath(path), "lib", "")
 	require.NoError(t, err)
 	require.True(t, info.HasRunPath)
-	require.Equal(t, []string{"/runpath"}, info.RunPaths)
+	require.Equal(t, rootfs.MustPaths("/runpath"), info.RunPaths)
 }
 
 func TestReadElfIgnoresSectionHeaders(t *testing.T) {
@@ -154,7 +155,7 @@ func TestReadElfIgnoresSectionHeaders(t *testing.T) {
 		// Shrink SHT_DYNAMIC below one entry; section-based readers fail on it.
 		Sections: func(s []elf.Section64) { s[2].Size = 1 },
 	})
-	info, err := readElf(path, "lib", "")
+	info, err := (&resolver{}).readElf(rootfs.MustPath(path), "lib", "")
 	require.NoError(t, err)
 	require.Equal(t, []string{"libone.so"}, info.Needed)
 }
@@ -166,7 +167,7 @@ func TestReadElfWithoutDynamicSegment(t *testing.T) {
 		Header:  func(h *elf.Header64) { h.Phoff, h.Phnum = 0, 0 },
 		Entries: elftest.Needed("libone.so"),
 	})
-	info, err := readElf(path, "lib", "")
+	info, err := (&resolver{}).readElf(rootfs.MustPath(path), "lib", "")
 	require.NoError(t, err)
 	require.Empty(t, info.Needed, "a file without PT_DYNAMIC has no dynamic dependencies")
 	require.Empty(t, info.SONAME)
@@ -212,7 +213,7 @@ func TestReadElfMalformedDynamicSegment(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "lib.so")
 			tt.fx.Entries = elftest.Needed("libone.so")
 			elftest.Write(t, path, tt.fx)
-			_, err := readElf(path, "lib", "")
+			_, err := (&resolver{}).readElf(rootfs.MustPath(path), "lib", "")
 			require.EqualError(t, err, tt.want)
 		})
 	}
@@ -222,7 +223,7 @@ func TestReadElfWithoutStringEntries(t *testing.T) {
 	// ld.so itself has PT_DYNAMIC but no DT_NEEDED; the string table is not needed then.
 	path := filepath.Join(t.TempDir(), "ld.so")
 	elftest.Write(t, path, elftest.Fixture{Omit: []elf.DynTag{elf.DT_STRTAB, elf.DT_STRSZ}})
-	info, err := readElf(path, "lib", "")
+	info, err := (&resolver{}).readElf(rootfs.MustPath(path), "lib", "")
 	require.NoError(t, err)
 	require.Empty(t, info.Needed)
 	require.Empty(t, info.SONAME)

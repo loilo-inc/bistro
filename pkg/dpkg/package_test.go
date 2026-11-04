@@ -6,6 +6,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -80,7 +81,7 @@ func TestPackageInfoFiles(t *testing.T) {
 			writeFixture(t, baseDir, "info/"+name+".md5sums", "d41d8cd98f00b204e9800998ecf8427e  usr/bin/example\n\ne2fc714c4727ee9395f324cd2e7f331f  etc/example.conf")
 			files, err := p.ListFiles()
 			require.NoError(t, err)
-			assert.Equal(t, []string{"/.", "/usr", "/usr/bin/example", "/etc/example.conf"}, files)
+			assert.Equal(t, rootfs.MustPaths("/.", "/usr", "/usr/bin/example", "/etc/example.conf"), files)
 			sums, err := p.Md5Sums()
 			require.NoError(t, err)
 			assert.Equal(t, []Checksum{

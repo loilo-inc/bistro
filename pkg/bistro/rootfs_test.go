@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -77,10 +78,10 @@ func TestRootFSAdd(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var out bytes.Buffer
 			root := NewRootFS(&out)
-			require.NoError(t, root.Add(tt.path, tt.content, tt.mode))
+			require.NoError(t, root.Add(rootfs.MustPath(tt.path), tt.content, tt.mode))
 			// A following entry verifies that the content size and tar padding
 			// do not corrupt the next file.
-			require.NoError(t, root.Add("next", []byte("next file"), 0644))
+			require.NoError(t, root.Add(rootfs.MustPath("next"), []byte("next file"), 0644))
 			require.NoError(t, root.Close())
 			entries := readRootFSTar(t, out.Bytes())
 			require.Contains(t, entries, tt.want)
@@ -120,7 +121,7 @@ func TestRootFSAddWriteErrors(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			root := NewRootFS(tt.writer)
-			assert.ErrorIs(t, root.Add("file", content, 0644), want)
+			assert.ErrorIs(t, root.Add(rootfs.MustPath("file"), content, 0644), want)
 		})
 	}
 }
@@ -135,7 +136,7 @@ func TestRootFSFilesAndDirectories(t *testing.T) {
 	var out bytes.Buffer
 	root := NewRootFS(&out)
 	for _, name := range []string{first, second, first, filepath.Dir(first)} {
-		require.NoError(t, root.Copy(name))
+		require.NoError(t, root.Copy(rootfs.MustPath(name)))
 	}
 	require.NoError(t, root.Close())
 	entries := readRootFSTar(t, out.Bytes())
@@ -202,7 +203,7 @@ func TestRootFSSymlinks(t *testing.T) {
 			var out bytes.Buffer
 			root := NewRootFS(&out)
 			for _, name := range []string{requested, requested, file} {
-				require.NoError(t, root.Copy(name))
+				require.NoError(t, root.Copy(rootfs.MustPath(name)))
 			}
 			require.NoError(t, root.Close())
 			entries := readRootFSTar(t, out.Bytes())
@@ -266,7 +267,7 @@ func TestRootFSStopsAtSpecialFileSymlinks(t *testing.T) {
 		filepath.Join(dir, "dev", "stderr"),
 		filepath.Join(dir, "dev", "procs", "file"),
 	} {
-		require.NoError(t, root.Copy(name))
+		require.NoError(t, root.Copy(rootfs.MustPath(name)))
 	}
 	require.NoError(t, root.Close())
 
@@ -285,10 +286,9 @@ func TestRootFSStopsAtSpecialFileSymlinks(t *testing.T) {
 	assert.Equal(t, "not special", entries[rootFSArchiveName(file)].body)
 }
 
-func TestRootFSRejectsInvalidPaths(t *testing.T) {
+func TestRootFSMissingPath(t *testing.T) {
 	root := NewRootFS(io.Discard)
-	assert.EqualError(t, root.Copy("relative/file"), "path must be absolute")
-	assert.ErrorIs(t, root.Copy(filepath.Join(rootFSTempDir(t), "missing")), os.ErrNotExist)
+	assert.ErrorIs(t, root.Copy(rootfs.MustPath(filepath.Join(rootFSTempDir(t), "missing"))), os.ErrNotExist)
 	require.NoError(t, root.Close())
 }
 
@@ -302,7 +302,7 @@ func TestRootFSRepeatedSymlink(t *testing.T) {
 	var out bytes.Buffer
 	root := NewRootFS(&out)
 	for range 2 {
-		require.NoError(t, root.Copy(filepath.Join(dir, "selfdir", "selfdir", "file")))
+		require.NoError(t, root.Copy(rootfs.MustPath(filepath.Join(dir, "selfdir", "selfdir", "file"))))
 	}
 	require.NoError(t, root.Close())
 
@@ -314,6 +314,63 @@ func TestRootFSRepeatedSymlink(t *testing.T) {
 	assert.Equal(t, ".", entries[rootFSArchiveName(link)].header.Linkname)
 	for name := range entries {
 		assert.False(t, strings.HasPrefix(name, rootFSArchiveName(link)+"/"), "entry under symlink: %s", name)
+	}
+}
+
+func TestRootFSSymlinkRootBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name, remaining string
+		escape          bool
+	}{
+		{name: "parent traversal to root"},
+		{name: "parent traversal to root with child", remaining: "child"},
+		{name: "parent traversal above root", escape: true},
+		{name: "parent traversal above root with child", escape: true, remaining: "child"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := rootFSTempDir(t)
+			target := filepath.Join(dir, "target")
+			child := filepath.Join(target, "child")
+			writeRootFSFile(t, child, "target contents", 0644)
+			depth := len(strings.Split(strings.TrimPrefix(dir, "/"), "/"))
+			if tc.escape {
+				depth++
+			}
+			linkTarget := strings.Repeat("../", depth) + strings.TrimPrefix(target, "/")
+			link := filepath.Join(dir, "link")
+			require.NoError(t, os.Symlink(linkTarget, link))
+			// The host accepts both links by clamping excess '..' at '/'.
+			// The archive must reject traversal above its root explicitly.
+			_, err := os.Stat(filepath.Join(link, tc.remaining))
+			require.NoError(t, err)
+
+			var out bytes.Buffer
+			root := NewRootFS(&out).(*rootFS)
+			for range 2 {
+				err := root.Copy(rootfs.MustPath(link).Join(tc.remaining))
+				if tc.escape {
+					require.ErrorContains(t, err, "path cannot start with '..'")
+				} else {
+					require.NoError(t, err)
+				}
+				require.Empty(t, root.resolving, "link resolution state must be cleared")
+			}
+			valid := filepath.Join(dir, "valid")
+			writeRootFSFile(t, valid, "after resolution", 0644)
+			require.NoError(t, root.Copy(rootfs.MustPath(valid)))
+			require.NoError(t, root.Close())
+			entries := readRootFSTar(t, out.Bytes())
+			require.Equal(t, "after resolution", entries[rootFSArchiveName(valid)].body)
+			if tc.escape {
+				require.NotContains(t, entries, rootFSArchiveName(target))
+				require.NotContains(t, entries, rootFSArchiveName(child))
+			} else {
+				require.Contains(t, entries, rootFSArchiveName(target))
+				if tc.remaining != "" {
+					require.Equal(t, "target contents", entries[rootFSArchiveName(child)].body)
+				}
+			}
+		})
 	}
 }
 
@@ -334,11 +391,11 @@ func TestRootFSCircularSymlinks(t *testing.T) {
 			var out bytes.Buffer
 			root := NewRootFS(&out)
 			for range 2 {
-				require.ErrorContains(t, root.Copy(filepath.Join(dir, "a")), tt.wantErr)
+				require.ErrorContains(t, root.Copy(rootfs.MustPath(filepath.Join(dir, "a"))), tt.wantErr)
 			}
 			file := filepath.Join(dir, "file")
 			writeRootFSFile(t, file, "after error", 0644)
-			require.NoError(t, root.Copy(file))
+			require.NoError(t, root.Copy(rootfs.MustPath(file)))
 			require.NoError(t, root.Close())
 			assert.Equal(t, "after error", readRootFSTar(t, out.Bytes())[rootFSArchiveName(file)].body)
 		})
@@ -358,14 +415,14 @@ func TestRootFSWriteErrors(t *testing.T) {
 	want := errors.New("write failed")
 	t.Run("Copy", func(t *testing.T) {
 		root := NewRootFS(&rootFSFailWriter{err: want})
-		assert.ErrorIs(t, root.Copy(rootFSTempDir(t)), want)
+		assert.ErrorIs(t, root.Copy(rootfs.MustPath(rootFSTempDir(t))), want)
 	})
 	t.Run("Close", func(t *testing.T) {
 		writer := &rootFSFailWriter{}
 		root := NewRootFS(writer)
 		file := filepath.Join(rootFSTempDir(t), "file")
 		writeRootFSFile(t, file, "content", 0644)
-		require.NoError(t, root.Copy(file))
+		require.NoError(t, root.Copy(rootfs.MustPath(file)))
 		writer.err = want
 		assert.ErrorIs(t, root.Close(), want)
 	})

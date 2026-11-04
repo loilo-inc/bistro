@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/loilo-inc/bistro/pkg/internal/elftest"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,10 +48,10 @@ func TestResolverSearchOrder(t *testing.T) {
 			}
 			root := filepath.Join(dir, "app")
 			elftest.WriteDynamic(t, root, entries...)
-			libs, err := withSysLibraryPaths(testResolver(t, options, records...), filepath.Dir(paths["system"])).ListObjects(root)
+			libs, err := withSysLibraryPaths(testResolver(t, options, records...), filepath.Dir(paths["system"])).ListObjects(rootfs.MustPath(root))
 			require.NoError(t, err)
 			require.Len(t, libs, 1)
-			require.Equal(t, paths[tt.want], libs[0].Path)
+			require.Equal(t, paths[tt.want], libs[0].Path.Abs())
 		})
 	}
 }
@@ -63,15 +64,62 @@ func TestResolverBrokenAndRelativePaths(t *testing.T) {
 	require.NoError(t, os.Mkdir("libs/directory.so", 0755))
 	root := filepath.Join(dir, "app")
 	elftest.WriteDynamic(t, root, append(elftest.Needed("link.so", "directory.so", "missing.so", "./absent.so", filepath.Join(dir, "absent.so")), elftest.DynString(elf.DT_RUNPATH, "libs"))...)
-	libs, err := testResolver(t, ResolverOptions{}).ListObjects(root)
+	libs, err := testResolver(t, ResolverOptions{}).ListObjects(rootfs.MustPath(root))
 	require.NoError(t, err)
 	require.Len(t, libs, 5)
 	abs, err := filepath.Abs("libs/link.so")
 	require.NoError(t, err)
-	require.Equal(t, abs, libs[0].Path)
+	require.Equal(t, abs, libs[0].Path.Abs())
 	for _, lib := range libs[1:] {
 		require.True(t, lib.IsBroken(), lib.Name)
 		require.Empty(t, lib.Deps)
+	}
+}
+
+func TestResolverPathBases(t *testing.T) {
+	for _, name := range []string{"environment", "RPATH", "RUNPATH", "relative NEEDED", "absolute NEEDED", "ORIGIN NEEDED", "unset environment"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			cwd := filepath.Join(dir, "work")
+			root := filepath.Join(dir, "bin", "app")
+			library := filepath.Join(cwd, "libs", "lib.so")
+			originLibrary := filepath.Join(dir, "bin", "libs", "lib.so")
+			elftest.WriteDynamic(t, library)
+			elftest.WriteDynamic(t, originLibrary)
+			elftest.WriteDynamic(t, filepath.Join(dir, "bin", "lib.so"))
+			t.Chdir(cwd)
+
+			needed := "lib.so"
+			options := ResolverOptions{}
+			var entries []elftest.Dyn
+			want := library
+			switch name {
+			case "environment":
+				options.LdLibraryPath = "libs"
+			case "RPATH":
+				entries = append(entries, elftest.DynString(elf.DT_RPATH, "libs"))
+			case "RUNPATH":
+				entries = append(entries, elftest.DynString(elf.DT_RUNPATH, "libs"))
+			case "relative NEEDED":
+				needed = "./libs/lib.so"
+			case "absolute NEEDED":
+				needed = library
+			case "ORIGIN NEEDED":
+				needed = "$ORIGIN/libs/lib.so"
+				want = originLibrary
+			}
+			entries = append(entries, elftest.Needed(needed)...)
+			elftest.WriteDynamic(t, root, entries...)
+			r := withSysLibraryPaths(testResolver(t, options))
+			if name == "unset environment" {
+				r = withSysLibraryPaths(r, filepath.Dir(library))
+			}
+			libs, err := r.ListObjects(rootfs.MustPath(root))
+			require.NoError(t, err)
+			require.Len(t, libs, 1)
+			require.False(t, libs[0].IsBroken())
+			require.Equal(t, want, libs[0].Path.Abs())
+		})
 	}
 }
 
@@ -101,10 +149,10 @@ func TestPathResolverSkipsIncompatibleCandidates(t *testing.T) {
 			elftest.WriteDynamic(t, filepath.Join(good, "lib.so"))
 			root := filepath.Join(dir, "app")
 			elftest.WriteDynamic(t, root, elftest.DynString(elf.DT_NEEDED, "lib.so"), elftest.DynString(elf.DT_RUNPATH, bad+":"+good))
-			libs, err := testResolver(t, ResolverOptions{}).ListObjects(root)
+			libs, err := testResolver(t, ResolverOptions{}).ListObjects(rootfs.MustPath(root))
 			require.NoError(t, err)
 			require.Len(t, libs, 1)
-			require.Equal(t, filepath.Join(good, "lib.so"), libs[0].Path)
+			require.Equal(t, filepath.Join(good, "lib.so"), libs[0].Path.Abs())
 		})
 	}
 }
@@ -133,7 +181,7 @@ func TestPathResolverAbortsOnMalformedCandidate(t *testing.T) {
 			elftest.WriteDynamic(t, filepath.Join(good, "lib.so"))
 			root := filepath.Join(dir, "app")
 			elftest.WriteDynamic(t, root, elftest.DynString(elf.DT_NEEDED, "lib.so"), elftest.DynString(elf.DT_RUNPATH, bad+":"+good))
-			_, err := testResolver(t, ResolverOptions{}).ListObjects(root)
+			_, err := testResolver(t, ResolverOptions{}).ListObjects(rootfs.MustPath(root))
 			require.ErrorContains(t, err, tt.want)
 			require.ErrorContains(t, err, badLib, "the error must name the malformed candidate")
 		})
@@ -145,7 +193,7 @@ func TestPathResolverNoCompatibleCandidate(t *testing.T) {
 	elftest.Write(t, filepath.Join(dir, "other.so"), elftest.Fixture{Machine: elf.EM_AARCH64})
 	root := filepath.Join(dir, "app")
 	elftest.WriteDynamic(t, root, append(elftest.Needed("other.so", filepath.Join(dir, "other.so"), "missing.so"), elftest.DynString(elf.DT_RUNPATH, dir))...)
-	libs, err := testResolver(t, ResolverOptions{}).ListObjects(root)
+	libs, err := testResolver(t, ResolverOptions{}).ListObjects(rootfs.MustPath(root))
 	require.NoError(t, err)
 	require.Len(t, libs, 3)
 	for _, lib := range libs {
@@ -179,10 +227,10 @@ func TestPathResolverVerifiesCacheEntry(t *testing.T) {
 			root := filepath.Join(dir, "app")
 			elftest.WriteDynamic(t, root, elftest.Needed("lib.so")...)
 			r := withSysLibraryPaths(testResolver(t, ResolverOptions{}, cacheRecord{"lib.so", cached, 0x303}), filepath.Dir(system))
-			libs, err := r.ListObjects(root)
+			libs, err := r.ListObjects(rootfs.MustPath(root))
 			require.NoError(t, err)
 			require.Len(t, libs, 1)
-			require.Equal(t, system, libs[0].Path, "fall back to system paths when the cache entry is unusable")
+			require.Equal(t, system, libs[0].Path.Abs(), "fall back to system paths when the cache entry is unusable")
 		})
 	}
 }
@@ -193,7 +241,7 @@ func TestPathResolverAbortsOnMalformedCacheEntry(t *testing.T) {
 	elftest.WriteNotELF(t, cached)
 	root := filepath.Join(dir, "app")
 	elftest.WriteDynamic(t, root, elftest.Needed("lib.so")...)
-	_, err := testResolver(t, ResolverOptions{}, cacheRecord{"lib.so", cached, 0x303}).ListObjects(root)
+	_, err := testResolver(t, ResolverOptions{}, cacheRecord{"lib.so", cached, 0x303}).ListObjects(rootfs.MustPath(root))
 	require.ErrorContains(t, err, "[ldd/readElf] malformed ELF file: "+cached+": ")
 	var formatErr *elf.FormatError
 	require.ErrorAs(t, err, &formatErr)

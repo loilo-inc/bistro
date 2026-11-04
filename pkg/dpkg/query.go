@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
+	"path"
 	"runtime"
 )
 
@@ -94,7 +94,7 @@ func (d *query) List() ([]*Package, error) {
 }
 
 func (q *query) LookUp(searchFile string) (*Package, error) {
-	if !filepath.IsAbs(searchFile) {
+	if !path.IsAbs(searchFile) {
 		return nil, fmt.Errorf("pattern must be an absolute path: %s", searchFile)
 	}
 	if q.filesMap != nil {
@@ -111,7 +111,7 @@ func (q *query) LookUp(searchFile string) (*Package, error) {
 			return nil, err
 		}
 		for _, file := range files {
-			filesMap[file] = pkg
+			filesMap[file.Abs()] = pkg
 		}
 	}
 	q.filesMap = filesMap
@@ -119,7 +119,7 @@ func (q *query) LookUp(searchFile string) (*Package, error) {
 }
 
 func (d *query) Load() error {
-	content, err := os.ReadFile(filepath.Join(d.baseDir, "status"))
+	content, err := os.ReadFile(path.Join(d.baseDir, "status"))
 	if err != nil {
 		return err
 	}

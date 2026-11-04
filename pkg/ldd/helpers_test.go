@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,12 +39,14 @@ func testResolver(t *testing.T, options ResolverOptions, records ...cacheRecord)
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "ld.so.cache")
 	require.NoError(t, os.WriteFile(path, cacheFixture(records...), 0644))
-	r := NewResolver(options).(*resolver)
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	r := NewResolver(cwd, options).(*resolver)
 	require.NoError(t, r.ldSoCache.load(path))
 	return r
 }
 
 func withSysLibraryPaths(r *resolver, paths ...string) *resolver {
-	r.sysLibraryPaths = paths
+	r.sysLibraryPaths = rootfs.MustPaths(paths...)
 	return r
 }

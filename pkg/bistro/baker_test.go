@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,7 +24,7 @@ func TestBakerCreatesArchive(t *testing.T) {
 	d := packageFilesStub(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {owned}})
 	out := filepath.Join(dir, "rootfs.tar")
 	writeRootFSFile(t, out, "previous archive", 0644)
-	err := NewBaker(DI{Query: d}).CreateRootFS(&BakeInput{Out: out, DpkgList: []*dpkg.Package{pkg}, Files: []string{explicit, owned, explicit}})
+	err := NewBaker(DI{Query: d}).CreateRootFS(&BakeInput{Out: out, DpkgList: []*dpkg.Package{pkg}, Files: rootfs.MustPaths(explicit, owned, explicit)})
 	require.NoError(t, err)
 	entries := readBundleTar(t, out)
 	assert.Equal(t, "package data", entries[rootFSArchiveName(owned)].body)
@@ -83,11 +84,13 @@ func TestBakerFailurePreservesOutputAndRemovesTemporaryFile(t *testing.T) {
 				require.NoError(t, os.Mkdir(path, 0755))
 			}
 			if stage == "package file" {
-				require.NoError(t, os.WriteFile(filepath.Join(d.baseDir, "info/example.list"), []byte("relative\n"), 0644))
+				broken := filepath.Join(d.baseDir, "loop")
+				require.NoError(t, os.Symlink("loop", broken))
+				require.NoError(t, os.WriteFile(filepath.Join(d.baseDir, "info/example.list"), []byte(broken+"\n"), 0644))
 			}
 			input := &BakeInput{Out: out, DpkgList: []*dpkg.Package{pkg}}
 			if stage == "explicit file" {
-				input.Files = []string{filepath.Join(dir, "missing")}
+				input.Files = rootfs.MustPaths(filepath.Join(dir, "missing"))
 			}
 			err := NewBaker(DI{Query: d}).CreateRootFS(input)
 			switch stage {
@@ -102,7 +105,7 @@ func TestBakerFailurePreservesOutputAndRemovesTemporaryFile(t *testing.T) {
 				assert.Equal(t, filepath.Join(d.baseDir, "info", "example"+extension), pathErr.Path)
 				assert.ErrorIs(t, err, syscall.EISDIR)
 			case "package file":
-				require.EqualError(t, err, "path must be absolute")
+				require.ErrorContains(t, err, "circular symlink")
 			case "explicit file":
 				var pathErr *os.PathError
 				require.ErrorAs(t, err, &pathErr)
@@ -161,7 +164,7 @@ type failingMetadataRoot struct {
 	err           error
 }
 
-func (r *failingMetadataRoot) Add(string, []byte, os.FileMode) error {
+func (r *failingMetadataRoot) Add(rootfs.Path, []byte, os.FileMode) error {
 	r.calls++
 	if r.calls == r.failAt {
 		return r.err

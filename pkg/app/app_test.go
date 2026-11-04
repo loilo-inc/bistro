@@ -9,8 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/loilo-inc/bistro/pkg/bistro"
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/ldd"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,7 +29,7 @@ func (r *cacheOnlyResolver) Load() error {
 	return nil
 }
 
-func (r *cacheOnlyResolver) ListObjects(string) ([]*ldd.Library, error) {
+func (r *cacheOnlyResolver) ListObjects(rootfs.Path) ([]*ldd.Library, error) {
 	r.t.Helper()
 	r.t.Fatal("unexpected ELF dependency scan")
 	return nil, nil
@@ -49,7 +51,7 @@ func TestHelpWithoutDpkgDatabase(t *testing.T) {
 					_ = writer.Close()
 					_ = reader.Close()
 				})
-				application := New("v", "c", "d").(*app)
+				application := &runner{app: New("v", "c", "d").(*app), DI: bistro.DI{}}
 				application.DI.Query = query
 				resolver := &cacheOnlyResolver{t: t}
 				application.DI.Ldd = resolver
@@ -58,7 +60,7 @@ func TestHelpWithoutDpkgDatabase(t *testing.T) {
 					args = append(args, command)
 				}
 				args = append(args, flag)
-				require.NoError(t, application.Run(context.Background(), args))
+				require.NoError(t, application.command().Run(context.Background(), args))
 				assert.Zero(t, resolver.loads)
 				require.NoError(t, writer.Close())
 				output, err := io.ReadAll(reader)
@@ -81,11 +83,12 @@ func TestBundleCopyFlags(t *testing.T) {
 	// Use an empty database so CLI loading does not depend on the host's dpkg.
 	baseDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "status"), nil, 0644))
-	application := New("v", "c", "d").(*app)
+	application := &runner{app: New("v", "c", "d").(*app), DI: bistro.DI{}}
+	application.cwd = dir
 	application.DI.Query = dpkg.NewQueryWithBaseDir(baseDir)
 	resolver := &cacheOnlyResolver{t: t}
 	application.DI.Ldd = resolver
-	err = application.Run(context.Background(), []string{
+	err = application.command().Run(context.Background(), []string{
 		"bistro", "bundle", "-o", out, "--copy", "first", "--copy", "second",
 	})
 	require.NoError(t, err)
