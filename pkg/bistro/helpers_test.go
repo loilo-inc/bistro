@@ -11,6 +11,7 @@ import (
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/internal/elftest"
 	"github.com/loilo-inc/bistro/pkg/ldd"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,18 +44,18 @@ type stubLdd func(string) ([]*ldd.Library, error)
 
 func (s stubLdd) Load() error { return nil }
 
-func (s stubLdd) ListObjects(path string) ([]*ldd.Library, error) { return s(path) }
+func (s stubLdd) ListObjects(path rootfs.Path) ([]*ldd.Library, error) { return s(path.Abs()) }
 
 type stubFinder struct {
 	trace       func(string) (*ExeTraceResult, error)
 	findPackage func(string) (*dpkg.Package, error)
 }
 
-func (s stubFinder) TraceDepsForExecutable(path string) (*ExeTraceResult, error) {
-	return s.trace(path)
+func (s stubFinder) TraceDepsForExecutable(path rootfs.Path) (*ExeTraceResult, error) {
+	return s.trace(path.Abs())
 }
-func (s stubFinder) FindPackageForExecutable(path string) (*dpkg.Package, error) {
-	return s.findPackage(path)
+func (s stubFinder) FindPackageForExecutable(path rootfs.Path) (*dpkg.Package, error) {
+	return s.findPackage(path.Abs())
 }
 func unownedFilesQuery() stubQuery {
 	return stubQuery{lookup: func(string) (*dpkg.Package, error) { return nil, nil }}
@@ -84,7 +85,7 @@ func testPackage(t *testing.T, binaryName, version, arch, status string) *dpkg.P
 
 type stubScanner func(string) ([]*ElfDependency, error)
 
-func (s stubScanner) Scan(path string) ([]*ElfDependency, error) { return s(path) }
+func (s stubScanner) Scan(path rootfs.Path) ([]*ElfDependency, error) { return s(path.Abs()) }
 
 // Generate an aarch64 ELF fixture, independent of the test host's executable
 // format, CPU, compiler, ldd and dpkg installation. A fixture with an
