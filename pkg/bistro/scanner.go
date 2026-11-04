@@ -3,20 +3,20 @@ package bistro
 import (
 	"debug/elf"
 	"os"
-	"path/filepath"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 )
 
 type Scanner interface {
-	Scan(origPath string) ([]*ElfDependency, error)
+	Scan(origPath rootfs.Path) ([]*ElfDependency, error)
 }
 
 type scanner struct {
 	DI
 	finder    Finder
-	fileCache map[string]*ElfFile
-	depsCache map[string]*ElfDependency
+	fileCache map[rootfs.Path]*ElfFile
+	depsCache map[rootfs.Path]*ElfDependency
 }
 
 var _ Scanner = &scanner{}
@@ -26,13 +26,13 @@ func NewScanner(di DI) Scanner {
 	return &scanner{
 		DI:        di,
 		finder:    finder,
-		fileCache: map[string]*ElfFile{},
-		depsCache: map[string]*ElfDependency{},
+		fileCache: map[rootfs.Path]*ElfFile{},
+		depsCache: map[rootfs.Path]*ElfDependency{},
 	}
 }
 
 type ElfFile struct {
-	Path     string
+	Path     rootfs.Path
 	Type     elf.Type
 	NeedsLdd bool
 }
@@ -45,19 +45,15 @@ type ElfDependency struct {
 	BrokenLibs   []string
 }
 
-func (s *scanner) Scan(origPath string) ([]*ElfDependency, error) {
-	origPathAbs, err := filepath.Abs(origPath)
-	if err != nil {
-		return nil, err
-	}
-	stat, err := os.Stat(origPathAbs)
+func (s *scanner) Scan(path rootfs.Path) ([]*ElfDependency, error) {
+	stat, err := os.Stat(path.Abs())
 	if err != nil {
 		return nil, err
 	}
 	if stat.IsDir() {
-		return s.ScanDir(origPathAbs)
+		return s.ScanDir(path)
 	}
-	elfFile, isElf, err := s.handleFile(origPathAbs)
+	elfFile, isElf, err := s.handleFile(path)
 	if !isElf {
 		return nil, err
 	}
@@ -71,8 +67,8 @@ func (s *scanner) Scan(origPath string) ([]*ElfDependency, error) {
 	return nil, nil
 }
 
-func (s *scanner) ScanDir(dir string) ([]*ElfDependency, error) {
-	elfFiles, err := s.findElfFiles(dir)
+func (s *scanner) ScanDir(path rootfs.Path) ([]*ElfDependency, error) {
+	elfFiles, err := s.findElfFiles(path)
 	if err != nil {
 		return nil, err
 	}
@@ -114,21 +110,21 @@ func (s *scanner) ScanFile(file *ElfFile) (*ElfDependency, error) {
 	return result, nil
 }
 
-func (s *scanner) findElfFiles(dir string) ([]*ElfFile, error) {
-	ertries, err := os.ReadDir(dir)
+func (s *scanner) findElfFiles(dir rootfs.Path) ([]*ElfFile, error) {
+	ertries, err := os.ReadDir(dir.Abs())
 	if err != nil {
 		return nil, err
 	}
 	var result []*ElfFile
 	for _, entry := range ertries {
 		if entry.IsDir() {
-			if subResult, err := s.findElfFiles(filepath.Join(dir, entry.Name())); err != nil {
+			if subResult, err := s.findElfFiles(dir.Join(entry.Name())); err != nil {
 				return nil, err
 			} else {
 				result = append(result, subResult...)
 			}
 		} else {
-			if file, isElf, err := s.handleFile(filepath.Join(dir, entry.Name())); err != nil {
+			if file, isElf, err := s.handleFile(dir.Join(entry.Name())); err != nil {
 				return nil, err
 			} else if isElf {
 				result = append(result, file)
@@ -138,11 +134,11 @@ func (s *scanner) findElfFiles(dir string) ([]*ElfFile, error) {
 	return result, nil
 }
 
-func (s *scanner) handleFile(path string) (*ElfFile, bool, error) {
+func (s *scanner) handleFile(path rootfs.Path) (*ElfFile, bool, error) {
 	if cache, ok := s.fileCache[path]; ok {
 		return cache, cache != nil, nil
 	}
-	elfFile, err := elf.Open(path)
+	elfFile, err := elf.Open(path.Abs())
 	if _, ok := err.(*elf.FormatError); ok {
 		return nil, false, nil
 	} else if err != nil {

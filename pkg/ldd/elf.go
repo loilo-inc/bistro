@@ -5,28 +5,29 @@ import (
 	"debug/elf"
 	"fmt"
 	"io"
-	"path/filepath"
 	"regexp"
+
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 )
 
 type elfInfo struct {
 	elf.FileHeader
 	*elfPath
-	Path   string
+	Path   rootfs.Path
 	SONAME string
 	Needed []string
 }
 
-func readElf(path string, dstLib string, dstPlatform string) (*elfInfo, error) {
-	file, err := elf.Open(path)
+func (r *resolver) readElf(path rootfs.Path, dstLib string, dstPlatform string) (*elfInfo, error) {
+	file, err := elf.Open(path.Abs())
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-	return newElf(file, path, dstLib, dstPlatform)
+	return r.newElf(file, path, dstLib, dstPlatform)
 }
 
-func newElf(file *elf.File, path string, dstLib string, dstPlatform string) (*elfInfo, error) {
+func (r *resolver) newElf(file *elf.File, path rootfs.Path, dstLib string, dstPlatform string) (*elfInfo, error) {
 
 	dynTable, err := readDynTable(file)
 	if err != nil {
@@ -41,7 +42,7 @@ func newElf(file *elf.File, path string, dstLib string, dstPlatform string) (*el
 		soname = dtSoname[0]
 	}
 
-	elfPath, err := expandElfPaths(path, dynTable, dstLib, dstPlatform)
+	elfPath, err := r.expandElfPaths(path, dynTable, dstLib, dstPlatform)
 	if err != nil {
 		return nil, err
 	}
@@ -55,34 +56,34 @@ func newElf(file *elf.File, path string, dstLib string, dstPlatform string) (*el
 }
 
 type elfPath struct {
-	Origin     string
-	RPaths     []string
-	RunPaths   []string
+	Origin     rootfs.Path
+	RPaths     []rootfs.Path
+	RunPaths   []rootfs.Path
 	HasRunPath bool
 }
 
-func expandElfPaths(path string, dynTable map[elf.DynTag][]string, dstLib string, dstPlatform string) (*elfPath, error) {
-	var rPaths []string
-	var runPaths []string
+func (r *resolver) expandElfPaths(path rootfs.Path, dynTable map[elf.DynTag][]string, dstLib string, dstPlatform string) (*elfPath, error) {
+	var rPaths []rootfs.Path
+	var runPaths []rootfs.Path
 
 	dtRPath := dynTable[elf.DT_RPATH]
 	dtRunPath := dynTable[elf.DT_RUNPATH]
 
-	origin := filepath.Dir(path)
+	origin := path.Dir()
 	hasRunPath := len(dtRunPath) > 0
 
 	// only evalueate DT_RPATH if DT_RUNPATH is not present
 	if !hasRunPath {
 		for _, p := range dtRPath {
-			exp := expandVars(p, origin, dstLib, dstPlatform)
-			paths := filepath.SplitList(exp)
+			exp := expandVars(p, origin.Abs(), dstLib, dstPlatform)
+			paths := r.cwd.SplitList(exp)
 			rPaths = append(rPaths, paths...)
 		}
 	}
 
 	for _, p := range dtRunPath {
-		exp := expandVars(p, origin, dstLib, dstPlatform)
-		paths := filepath.SplitList(exp)
+		exp := expandVars(p, origin.Abs(), dstLib, dstPlatform)
+		paths := r.cwd.SplitList(exp)
 		runPaths = append(runPaths, paths...)
 	}
 

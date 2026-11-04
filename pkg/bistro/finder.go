@@ -7,11 +7,12 @@ import (
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/ldd"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 )
 
 type Finder interface {
-	TraceDepsForExecutable(file string) (*ExeTraceResult, error)
-	FindPackageForExecutable(file string) (*dpkg.Package, error)
+	TraceDepsForExecutable(file rootfs.Path) (*ExeTraceResult, error)
+	FindPackageForExecutable(file rootfs.Path) (*dpkg.Package, error)
 }
 
 type finder struct {
@@ -34,10 +35,7 @@ type ExeTraceResult struct {
 
 var _ Finder = &finder{}
 
-func (f *finder) TraceDepsForExecutable(file string) (*ExeTraceResult, error) {
-	if !filepath.IsAbs(file) {
-		return nil, errors.New("file path is not absolute: " + file)
-	}
+func (f *finder) TraceDepsForExecutable(file rootfs.Path) (*ExeTraceResult, error) {
 
 	var result ExeTraceResult
 
@@ -66,10 +64,7 @@ func (f *finder) TraceDepsForExecutable(file string) (*ExeTraceResult, error) {
 	return &result, nil
 }
 
-func (b *finder) FindPackageForExecutable(file string) (*dpkg.Package, error) {
-	if !filepath.IsAbs(file) {
-		return nil, errors.New("file path is not absolute: " + file)
-	}
+func (b *finder) FindPackageForExecutable(file rootfs.Path) (*dpkg.Package, error) {
 	realpath, err := realpath(file)
 	if err != nil {
 		return nil, err
@@ -90,18 +85,15 @@ func (f *finder) searchPackage(file string) (*dpkg.Package, error) {
 	return result, nil
 }
 
-func realpath(file string) (string, error) {
-	if !filepath.IsAbs(file) {
-		return "", errors.New("library path is not absolute: " + file)
-	}
-	stat, err := os.Stat(file)
+func realpath(file rootfs.Path) (string, error) {
+	stat, err := os.Stat(file.Abs())
 	if err != nil {
 		return "", err
 	}
 	if stat.IsDir() {
-		return "", errors.New("library path is a directory: " + file)
+		return "", errors.New("library path is a directory: " + file.Abs())
 	}
-	resolved, err := filepath.EvalSymlinks(file)
+	resolved, err := filepath.EvalSymlinks(file.Abs())
 	if err != nil {
 		return "", err
 	}

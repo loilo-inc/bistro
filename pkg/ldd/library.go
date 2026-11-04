@@ -1,19 +1,21 @@
 package ldd
 
+import "github.com/loilo-inc/bistro/pkg/rootfs"
+
 type Library struct {
 	Name string
-	Path string
+	Path rootfs.Path
 	Deps []*Library
 }
 
 func (l *Library) IsBroken() bool {
-	return l.Path == ""
+	return l.Path.Path() == ""
 }
 
 func FlattenDeps(libs ...*Library) ([]*Library, []string) {
 	var result []*Library
 	var broken []string
-	visited := make(map[string]bool)
+	visited := make(map[rootfs.Path]bool)
 	visitedBroken := make(map[string]bool)
 	var queue []*Library
 	queue = append(queue, libs...)

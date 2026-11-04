@@ -1,30 +1,32 @@
 package ldd
 
 import (
-	"os"
-	"path/filepath"
+	"path"
 	"runtime"
 
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/loilo-inc/bistro/pkg/util"
 )
 
 type Resolver interface {
 	Load() error
-	ListObjects(path string) ([]*Library, error)
+	ListObjects(path rootfs.Path) ([]*Library, error)
 }
 
 type resolver struct {
+	cwd             rootfs.Path
 	ldLibraryPath   string
-	sysLibraryPaths []string
+	sysLibraryPaths []rootfs.Path
 	dstLib          string
 	dstPlatform     string
-	elfCache        util.Map[string, *elfInfo]
+	elfCache        util.Map[rootfs.Path, *elfInfo]
 	ldSoCache       LdCache
 }
 
 var _ Resolver = (*resolver)(nil)
 
 type ResolverOptions struct {
+	Cwd           string
 	LdLibraryPath string
 	// $LIB Dynamic String Token
 	DstLib string
@@ -32,26 +34,27 @@ type ResolverOptions struct {
 	DstPlatform string
 }
 
-func DefaultResolver() Resolver {
-	return NewResolver(ResolverOptions{
-		LdLibraryPath: os.Getenv("LD_LIBRARY_PATH"),
-		DstLib:        getDstLib(runtime.GOARCH),
-		DstPlatform:   getDstPlatform(runtime.GOARCH),
-	})
-}
-
-func NewResolver(input ResolverOptions) Resolver {
+func NewResolver(cwd string, input ResolverOptions) Resolver {
+	if input.DstLib == "" {
+		input.DstLib = getDstLib(runtime.GOARCH)
+	}
+	if input.DstPlatform == "" {
+		input.DstPlatform = getDstPlatform(runtime.GOARCH)
+	}
 	var sysLibraryPath []string
 	if input.DstLib != "" {
 		sysLibraryPath = append(sysLibraryPath,
-			filepath.Join("/", input.DstLib),
-			filepath.Join("/usr", input.DstLib),
+			path.Join("/", input.DstLib),
+			path.Join("/usr", input.DstLib),
 		)
 	}
-	sysLibraryPath = append(sysLibraryPath, "/lib", "/usr/lib", "/lib64", "/usr/lib64")
+	sysLibraryPath = append(sysLibraryPath,
+		"/lib", "/usr/lib", "/lib64", "/usr/lib64",
+	)
 	return &resolver{
+		cwd:             rootfs.NewPath(cwd),
 		ldLibraryPath:   input.LdLibraryPath,
-		sysLibraryPaths: sysLibraryPath,
+		sysLibraryPaths: rootfs.Paths(sysLibraryPath...),
 		dstLib:          input.DstLib,
 		dstPlatform:     input.DstPlatform,
 	}
@@ -63,20 +66,24 @@ func (r *resolver) Load() error {
 
 type searchResult struct {
 	libs   []*Library
-	rPaths []string
+	rPaths []rootfs.Path
 }
 
-func (r *resolver) ListObjects(path string) ([]*Library, error) {
+func (r *resolver) ListObjects(exePath rootfs.Path) ([]*Library, error) {
+	exeDir := exePath.Dir()
 
-	ldLibraryPath := expandVars(r.ldLibraryPath, filepath.Dir(path), r.dstLib, r.dstPlatform)
-	ldLibraryPaths := filepath.SplitList(ldLibraryPath)
+	var ldLibraryPaths []rootfs.Path
+	if r.ldLibraryPath != "" {
+		expanded := expandVars(r.ldLibraryPath, exeDir.Abs(), r.dstLib, r.dstPlatform)
+		ldLibraryPaths = r.cwd.SplitList(expanded)
+	}
 
 	rr := &rootResolver{
 		resolver:       r,
 		ldLibraryPaths: ldLibraryPaths,
 	}
 
-	rootDeps, err := rr.listObjects(path, nil)
+	rootDeps, err := rr.listObjects(exePath, nil)
 	if err != nil {
 		return nil, err
 	}

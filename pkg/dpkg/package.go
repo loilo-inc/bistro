@@ -3,8 +3,10 @@ package dpkg
 import (
 	"fmt"
 	"os"
-	"path/filepath"
+	"path"
 	"strings"
+
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 )
 
 // https://man7.org/linux/man-pages/man1/dpkg-query.1.html
@@ -22,7 +24,7 @@ type Field struct {
 }
 
 type ListData struct {
-	Files []string
+	Files []rootfs.Path
 }
 
 type Md5Sums struct {
@@ -94,27 +96,27 @@ func (p *Package) infoPath(extension string) string {
 	if baseDir == "" {
 		baseDir = DefaultBaseDir
 	}
-	return filepath.Join(baseDir, "info", p.NameWithArch()+extension)
+	return path.Join(baseDir, "info", p.NameWithArch()+extension)
 }
 
-func (p *Package) ListFiles() ([]string, error) {
+func (p *Package) ListFiles() ([]rootfs.Path, error) {
 	if p.list == nil {
 		listFile := p.infoPath(".list")
 		content, err := os.ReadFile(listFile)
 		// ignore non-exist error for various reasons (e.g., file removed)
 		if os.IsNotExist(err) {
-			p.list = &ListData{Files: []string{}}
+			p.list = &ListData{Files: []rootfs.Path{}}
 			return p.list.Files, nil
 		}
 		if err != nil {
 			return nil, err
 		}
-		var files []string
+		var files []rootfs.Path
 		for f := range strings.SplitSeq(string(content), "\n") {
 			if f == "" {
 				continue
 			}
-			files = append(files, f)
+			files = append(files, rootfs.NewPath(f))
 		}
 		p.list = &ListData{Files: files}
 	}

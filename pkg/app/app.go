@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 
 	"github.com/loilo-inc/bistro/pkg/bistro"
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/ldd"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/urfave/cli/v3"
 )
 
@@ -16,7 +18,6 @@ type App interface {
 }
 
 type app struct {
-	DI      bistro.DI
 	version string
 	commit  string
 	date    string
@@ -25,23 +26,14 @@ type app struct {
 var _ App = (*app)(nil)
 
 func New(version, commit, date string) App {
-	ldd := ldd.DefaultResolver()
-	query := dpkg.NewQuery()
-	logger := bistro.NewLogger(os.Stdout, os.Stderr)
-
 	return &app{
-		DI: bistro.DI{
-			Query:  query,
-			Ldd:    ldd,
-			Logger: logger,
-		},
 		version: version,
 		commit:  commit,
 		date:    date,
 	}
 }
 
-func (c *app) load() error {
+func (c *runner) load() error {
 	if err := c.DI.Query.Load(); err != nil {
 		return err
 	}
@@ -51,7 +43,7 @@ func (c *app) load() error {
 	return nil
 }
 
-func (c *app) command() *cli.Command {
+func (c *runner) command() *cli.Command {
 	return &cli.Command{
 		Name:    "bistro",
 		Usage:   "Build a distroless root filesystem",
@@ -67,7 +59,7 @@ func (c *app) command() *cli.Command {
 					if err := c.load(); err != nil {
 						return err
 					}
-					return c.scan(cmd.Args().Slice()...)
+					return c.scan(c.rootfsPaths(cmd.Args().Slice()...)...)
 				},
 			},
 			{
@@ -98,11 +90,11 @@ func (c *app) command() *cli.Command {
 						return err
 					}
 					return c.bundle(bistro.BundleInput{
-						Out:      cmd.String("out"),
-						Files:    cmd.Args().Slice(),
-						Scans:    cmd.StringSlice("scan"),
+						Out:      c.absPath(cmd.String("out")),
+						Files:    c.rootfsPaths(cmd.Args().Slice()...),
+						Scans:    c.rootfsPaths(cmd.StringSlice("scan")...),
 						Packages: cmd.StringSlice("package"),
-						Copies:   cmd.StringSlice("copy"),
+						Copies:   c.rootfsPaths(cmd.StringSlice("copy")...),
 					})
 				},
 			},
@@ -110,11 +102,36 @@ func (c *app) command() *cli.Command {
 	}
 }
 
-func (c *app) Run(ctx context.Context, args []string) error {
-	return c.command().Run(ctx, args)
+type runner struct {
+	bistro.DI
+	*app
+	cwd string
 }
 
-func (c *app) scan(paths ...string) error {
+func (c *app) Run(ctx context.Context, args []string) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	ldd := ldd.NewResolver(cwd, ldd.ResolverOptions{
+		Cwd:           cwd,
+		LdLibraryPath: os.Getenv("LD_LIBRARY_PATH"),
+	})
+	query := dpkg.NewQuery()
+	logger := bistro.NewLogger(os.Stdout, os.Stderr)
+	r := &runner{
+		DI: bistro.DI{
+			Query:  query,
+			Ldd:    ldd,
+			Logger: logger,
+		},
+		app: c,
+		cwd: cwd,
+	}
+	return r.command().Run(ctx, args)
+}
+
+func (c *runner) scan(paths ...rootfs.Path) error {
 	scanner := bistro.NewScanner(c.DI)
 	var elfDeps []*bistro.ElfDependency
 	for _, path := range paths {
@@ -140,7 +157,22 @@ func (c *app) scan(paths ...string) error {
 	return nil
 }
 
-func (c *app) bundle(input bistro.BundleInput) error {
+func (c *runner) bundle(input bistro.BundleInput) error {
 	bundler := bistro.NewBundler(c.DI)
 	return bundler.Bundle(input)
+}
+
+func (c *runner) absPath(p string) string {
+	if path.IsAbs(p) {
+		return p
+	}
+	return path.Join(c.cwd, p)
+}
+
+func (c *runner) rootfsPaths(paths ...string) []rootfs.Path {
+	var result []rootfs.Path
+	for _, p := range paths {
+		result = append(result, rootfs.NewPath(c.absPath(p)))
+	}
+	return result
 }

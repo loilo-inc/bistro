@@ -3,18 +3,18 @@ package bistro
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 )
 
 type BundleInput struct {
 	Out      string
-	Files    []string
-	Scans    []string
+	Files    []rootfs.Path
+	Scans    []rootfs.Path
 	Packages []string
-	Copies   []string
+	Copies   []rootfs.Path
 }
 
 type Bundler interface {
@@ -25,7 +25,7 @@ type bundler struct {
 	DI
 	scanner         Scanner
 	packages        []*dpkg.Package
-	files           []string
+	files           []rootfs.Path
 	missingPackages []string
 	brokenDeps      []*ElfDependency
 	visitedPackages map[string]struct{}
@@ -81,9 +81,7 @@ func (b *bundler) Bundle(input BundleInput) error {
 	}
 
 	for _, copy := range input.Copies {
-		if abs, err := filepath.Abs(copy); err != nil {
-			return err
-		} else if err := b.addCopyFile(abs); err != nil {
+		if err := b.addCopyFile(copy); err != nil {
 			return err
 		}
 	}
@@ -105,11 +103,8 @@ func (b *bundler) Bundle(input BundleInput) error {
 	})
 }
 
-func (b *bundler) addCopyFile(file string) error {
-	if !filepath.IsAbs(file) {
-		return fmt.Errorf("path must be absolute: %s", file)
-	}
-	lstat, err := os.Lstat(file)
+func (b *bundler) addCopyFile(file rootfs.Path) error {
+	lstat, err := os.Lstat(file.Abs())
 	if err != nil {
 		return err
 	}
@@ -119,12 +114,12 @@ func (b *bundler) addCopyFile(file string) error {
 	if !lstat.IsDir() {
 		return nil
 	}
-	entries, err := os.ReadDir(file)
+	entries, err := os.ReadDir(file.Abs())
 	if err != nil {
 		return err
 	}
 	for _, entry := range entries {
-		err := b.addCopyFile(filepath.Join(file, entry.Name()))
+		err := b.addCopyFile(file.Join(entry.Name()))
 		if err != nil {
 			return err
 		}

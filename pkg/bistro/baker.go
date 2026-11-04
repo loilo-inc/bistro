@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 )
 
 type Baker interface {
@@ -25,7 +26,7 @@ func NewBaker(di DI) Baker {
 type BakeInput struct {
 	Out      string
 	DpkgList []*dpkg.Package
-	Files    []string
+	Files    []rootfs.Path
 }
 
 func (b *baker) CreateRootFS(input *BakeInput) (err error) {
@@ -76,14 +77,14 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 const DpkgStatusDir = "/var/lib/dpkg/status.d"
 
 func (b *baker) writePackageMetadata(rootFS RootFS, pkg *dpkg.Package) error {
-	if err := rootFS.Add(filepath.Join(DpkgStatusDir, pkg.Name()), []byte(pkg.String()), 0644); err != nil {
+	if err := rootFS.Add(rootfs.NewPath(DpkgStatusDir).Join(pkg.Name()), []byte(pkg.String()), 0644); err != nil {
 		return err
 	}
 	md5sums, err := pkg.Md5Sums()
 	if err != nil {
 		return err
 	}
-	if err = rootFS.Add(filepath.Join(DpkgStatusDir, pkg.Name()+".md5sums"), []byte(md5sums.String()), 0644); err != nil {
+	if err = rootFS.Add(rootfs.NewPath(DpkgStatusDir).Join(pkg.Name()+".md5sums"), []byte(md5sums.String()), 0644); err != nil {
 		return err
 	}
 	files, err := pkg.ListFiles()
