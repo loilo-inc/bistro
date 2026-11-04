@@ -49,7 +49,7 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 			os.Remove(tmpFile.Name())
 		}
 	}()
-	rootfs := NewRootFS(tmpFile)
+	rootfs := rootfs.NewArchiver(tmpFile)
 	for _, pkg := range input.DpkgList {
 		if err := b.writePackageMetadata(rootfs, pkg); err != nil {
 			return err
@@ -76,18 +76,18 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 // directory to store dpkg status used by distroless
 const DpkgStatusDir = "/var/lib/dpkg/status.d"
 
-func (b *baker) writePackageMetadata(rootFS RootFS, pkg *dpkg.Package) error {
+func (b *baker) writePackageMetadata(rootFS rootfs.Archiver, pkg *dpkg.Package) error {
 	if err := rootFS.Add(rootfs.MustPath(DpkgStatusDir).Join(pkg.Name()), []byte(pkg.String()), 0644); err != nil {
 		return err
 	}
-	md5sums, err := pkg.Md5Sums()
+	md5sums, err := pkg.Md5Sums(b.FS)
 	if err != nil {
 		return err
 	}
 	if err = rootFS.Add(rootfs.MustPath(DpkgStatusDir).Join(pkg.Name()+".md5sums"), []byte(md5sums.String()), 0644); err != nil {
 		return err
 	}
-	files, err := pkg.ListFiles()
+	files, err := pkg.ListFiles(b.FS)
 	if err != nil {
 		return err
 	}

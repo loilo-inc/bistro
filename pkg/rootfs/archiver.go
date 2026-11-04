@@ -1,54 +1,53 @@
-package bistro
+package rootfs
 
 import (
 	"archive/tar"
 	"fmt"
 	"io"
-	"os"
+	"io/fs"
 	"path"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
-
-	"github.com/loilo-inc/bistro/pkg/rootfs"
 )
 
-type RootFS interface {
+type Archiver interface {
 	// Copy copies the file or directory at the given absolute path into the root filesystem.
-	Copy(path rootfs.Path) error
+	Copy(path Path) error
 	// Add adds a file with the given content and mode to the root filesystem.
-	Add(path rootfs.Path, content []byte, mode os.FileMode) error
+	Add(path Path, content []byte, mode fs.FileMode) error
 	// Close finalizes the root filesystem, writing any remaining data.
 	Close() error
 }
 
-type rootFS struct {
-	copied    map[rootfs.Path]struct{}
+type archiver struct {
+	copied    map[Path]struct{}
 	resolving map[resolvingState]struct{}
 	spFilePat *regexp.Regexp
 	tw        *tar.Writer
+	fs        fs.FS
 }
 
 type resolvingState struct {
-	path      rootfs.Path
+	path      Path
 	remaining string
 }
 
-var _ RootFS = &rootFS{}
+var _ Archiver = &archiver{}
 
-func NewRootFS(out io.Writer) RootFS {
-	return &rootFS{
+func NewArchiver(out io.Writer) Archiver {
+	return &archiver{
 		tw:        tar.NewWriter(out),
-		copied:    make(map[rootfs.Path]struct{}),
+		copied:    make(map[Path]struct{}),
 		resolving: make(map[resolvingState]struct{}),
 		spFilePat: regexp.MustCompile(`^/(proc|sys)(/|$)`),
 	}
 }
 
-func (r *rootFS) Copy(path rootfs.Path) error {
-	var paths []rootfs.Path
-	var p rootfs.Path = path
+func (r *archiver) Copy(path Path) error {
+	var paths []Path
+	var p Path = path
 	for ; ; p = p.Dir() {
 		paths = append(paths, p)
 		if p.Abs() == "/" {
@@ -65,7 +64,7 @@ func (r *rootFS) Copy(path rootfs.Path) error {
 	return nil
 }
 
-func (r *rootFS) Add(path rootfs.Path, content []byte, mode os.FileMode) error {
+func (r *archiver) Add(path Path, content []byte, mode fs.FileMode) error {
 	header := &tar.Header{
 		Name:    path.TarName(),
 		Mode:    int64(mode),
@@ -79,18 +78,18 @@ func (r *rootFS) Add(path rootfs.Path, content []byte, mode os.FileMode) error {
 	return err
 }
 
-func (r *rootFS) Close() error {
+func (r *archiver) Close() error {
 	return r.tw.Close()
 }
 
-func (r *rootFS) handleSubdir(file rootfs.Path, origPath rootfs.Path) (terminate bool, err error) {
-	lstat, err := os.Lstat(file.Abs())
+func (r *archiver) handleSubdir(file Path, origPath Path) (terminate bool, err error) {
+	lstat, err := fs.Lstat(r.fs, file.Path())
 	if err != nil {
 		return false, err
 	}
-	isSymlink := lstat.Mode()&os.ModeSymlink != 0
+	isSymlink := lstat.Mode()&fs.ModeSymlink != 0
 	if isSymlink {
-		link, err := os.Readlink(file.Abs())
+		link, err := fs.ReadLink(r.fs, file.Path())
 		if err != nil {
 			return false, err
 		}
@@ -107,7 +106,7 @@ func (r *rootFS) handleSubdir(file rootfs.Path, origPath rootfs.Path) (terminate
 	return false, r.copyOne(file, "", lstat)
 }
 
-func (r *rootFS) copyLink(file rootfs.Path, link string, remaining string) error {
+func (r *archiver) copyLink(file Path, link string, remaining string) error {
 	state := resolvingState{path: file, remaining: remaining}
 	if _, ok := r.resolving[state]; ok {
 		return fmt.Errorf("circular symlink detected: %s -> %s", file.Abs(), link)
@@ -118,13 +117,13 @@ func (r *rootFS) copyLink(file rootfs.Path, link string, remaining string) error
 	r.resolving[state] = struct{}{}
 	defer delete(r.resolving, state)
 
-	var target rootfs.Path
+	var target Path
 	if path.IsAbs(link) {
-		target = rootfs.MustPath(link)
+		target = MustPath(link)
 	} else {
 		// prohibit symlink to outside of the root filesystem
 		untrusted := path.Join(file.Dir().Path(), link)
-		v, err := rootfs.NewPath(untrusted)
+		v, err := NewPath(untrusted)
 		if err != nil {
 			return err
 		}
@@ -137,7 +136,7 @@ func (r *rootFS) copyLink(file rootfs.Path, link string, remaining string) error
 	return r.Copy(target.Join(remaining))
 }
 
-func (r *rootFS) copyOne(path rootfs.Path, link string, lstat os.FileInfo) (err error) {
+func (r *archiver) copyOne(path Path, link string, lstat fs.FileInfo) (err error) {
 	defer func() {
 		if err == nil {
 			r.copied[path] = struct{}{}
@@ -161,7 +160,7 @@ func (r *rootFS) copyOne(path rootfs.Path, link string, lstat os.FileInfo) (err 
 	if !lstat.Mode().IsRegular() {
 		return nil
 	}
-	file, err := os.Open(path.Abs())
+	file, err := r.fs.Open(path.Path())
 	if err != nil {
 		return err
 	}

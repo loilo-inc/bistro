@@ -113,17 +113,20 @@ func (c *app) Run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	ldd := ldd.NewResolver(cwd, ldd.ResolverOptions{
+	fs := os.DirFS("/")
+	ldd := ldd.NewResolver(ldd.ResolverOptions{
 		Cwd:           cwd,
 		LdLibraryPath: os.Getenv("LD_LIBRARY_PATH"),
+		FS:            fs,
 	})
-	query := dpkg.NewQuery()
+	query := dpkg.NewQuery(fs)
 	logger := bistro.NewLogger(os.Stdout, os.Stderr)
 	r := &runner{
 		DI: bistro.DI{
 			Query:  query,
 			Ldd:    ldd,
 			Logger: logger,
+			FS:     fs,
 		},
 		app: c,
 		cwd: cwd,

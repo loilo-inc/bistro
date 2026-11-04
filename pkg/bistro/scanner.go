@@ -2,7 +2,7 @@ package bistro
 
 import (
 	"debug/elf"
-	"os"
+	"io/fs"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
@@ -46,7 +46,7 @@ type ElfDependency struct {
 }
 
 func (s *scanner) Scan(path rootfs.Path) ([]*ElfDependency, error) {
-	stat, err := os.Stat(path.Abs())
+	stat, err := fs.Stat(s.FS, path.Path())
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func (s *scanner) ScanFile(file *ElfFile) (*ElfDependency, error) {
 }
 
 func (s *scanner) findElfFiles(dir rootfs.Path) ([]*ElfFile, error) {
-	ertries, err := os.ReadDir(dir.Abs())
+	ertries, err := fs.ReadDir(s.FS, dir.Path())
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +138,7 @@ func (s *scanner) handleFile(path rootfs.Path) (*ElfFile, bool, error) {
 	if cache, ok := s.fileCache[path]; ok {
 		return cache, cache != nil, nil
 	}
-	elfFile, err := elf.Open(path.Abs())
+	elfFile, err := elf.Open(path.Path())
 	if _, ok := err.(*elf.FormatError); ok {
 		return nil, false, nil
 	} else if err != nil {

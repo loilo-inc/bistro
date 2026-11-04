@@ -3,7 +3,6 @@ package ldd
 import (
 	"errors"
 	"io/fs"
-	"os"
 	"strings"
 
 	"github.com/loilo-inc/bistro/pkg/rootfs"
@@ -78,7 +77,7 @@ func (p *pathResolver) lookupLdCache() (*rootfs.Path, bool, error) {
 
 func (p *pathResolver) resolvePath(paths []rootfs.Path) (*rootfs.Path, bool, error) {
 	for _, path := range paths {
-		stat, err := os.Stat(path.Abs())
+		stat, err := fs.Stat(p.fs, path.Path())
 		if err != nil {
 			continue
 		}

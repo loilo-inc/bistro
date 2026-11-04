@@ -3,9 +3,11 @@ package ldd
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/loilo-inc/bistro/pkg/util"
 )
 
@@ -28,18 +30,30 @@ type CacheEntry struct {
 	HWCap           uint64
 }
 
-type LdCache struct {
+type LdCache interface {
+	ResolveLibrary(libName string, abiFlag cacheABI) (string, bool)
+	Load() error
+}
+
+type ldCache struct {
 	entries []*CacheEntry
 	data    []byte
 	keyMap  util.Map[string, []*CacheEntry]
+	fs      fs.FS
 }
 
-func (l *LdCache) ResolveLibrary(libName string, abiFlag cacheABI) (string, bool) {
+var _ LdCache = (*ldCache)(nil)
+
+func NewLdCache(fss fs.FS) LdCache {
+	return &ldCache{fs: fss}
+}
+
+func (l *ldCache) ResolveLibrary(libName string, abiFlag cacheABI) (string, bool) {
 	path := l.doResolve(libName, abiFlag)
 	return path, path != ""
 }
 
-func (l *LdCache) doResolve(libName string, abiFlag cacheABI) string {
+func (l *ldCache) doResolve(libName string, abiFlag cacheABI) string {
 	candidates, ok := l.keyMap.LookUp(libName)
 	if !ok {
 		return ""
@@ -53,7 +67,7 @@ func (l *LdCache) doResolve(libName string, abiFlag cacheABI) string {
 	return ""
 }
 
-func (l *LdCache) readString(offset uint32) string {
+func (l *ldCache) readString(offset uint32) string {
 	if uint64(offset) >= uint64(len(l.data)) {
 		return ""
 	}
@@ -64,13 +78,9 @@ func (l *LdCache) readString(offset uint32) string {
 	return ""
 }
 
-func (l *LdCache) Load() error {
-	return l.load(DefaultCachePath)
-}
-
-func (l *LdCache) load(path string) error {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+func (l *ldCache) Load() error {
+	data, err := fs.ReadFile(l.fs, defaultCachePath.Path())
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	} else if err != nil {
 		return err
@@ -89,7 +99,7 @@ func (l *LdCache) load(path string) error {
 	return nil
 }
 
-const DefaultCachePath = "/etc/ld.so.cache"
+var defaultCachePath = rootfs.MustPath("/etc/ld.so.cache")
 
 func ParseLdSoCache(data []byte) ([]*CacheEntry, error) {
 	r := bytes.NewReader(data)

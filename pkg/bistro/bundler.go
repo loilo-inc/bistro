@@ -2,7 +2,7 @@ package bistro
 
 import (
 	"fmt"
-	"os"
+	"io/fs"
 	"strings"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
@@ -104,7 +104,7 @@ func (b *bundler) Bundle(input BundleInput) error {
 }
 
 func (b *bundler) addCopyFile(file rootfs.Path) error {
-	lstat, err := os.Lstat(file.Abs())
+	lstat, err := fs.Lstat(b.FS, file.Path())
 	if err != nil {
 		return err
 	}
@@ -114,7 +114,7 @@ func (b *bundler) addCopyFile(file rootfs.Path) error {
 	if !lstat.IsDir() {
 		return nil
 	}
-	entries, err := os.ReadDir(file.Abs())
+	entries, err := fs.ReadDir(b.FS, file.Path())
 	if err != nil {
 		return err
 	}

@@ -18,15 +18,6 @@ type elfInfo struct {
 	Needed []string
 }
 
-func (r *resolver) readElf(path rootfs.Path, dstLib string, dstPlatform string) (*elfInfo, error) {
-	file, err := elf.Open(path.Abs())
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	return r.newElf(file, path, dstLib, dstPlatform)
-}
-
 func (r *resolver) newElf(file *elf.File, path rootfs.Path, dstLib string, dstPlatform string) (*elfInfo, error) {
 
 	dynTable, err := readDynTable(file)

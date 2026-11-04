@@ -2,7 +2,7 @@ package bistro
 
 import (
 	"errors"
-	"os"
+	"io/fs"
 	"path/filepath"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
@@ -48,7 +48,7 @@ func (f *finder) TraceDepsForExecutable(file rootfs.Path) (*ExeTraceResult, erro
 	result.BrokenLibs = append(result.BrokenLibs, broken...)
 
 	for _, lib := range uniqueLibs {
-		realpath, err := realpath(lib.Path)
+		realpath, err := f.realpath(lib.Path)
 		if err != nil {
 			return nil, err
 		}
@@ -65,7 +65,7 @@ func (f *finder) TraceDepsForExecutable(file rootfs.Path) (*ExeTraceResult, erro
 }
 
 func (b *finder) FindPackageForExecutable(file rootfs.Path) (*dpkg.Package, error) {
-	realpath, err := realpath(file)
+	realpath, err := b.realpath(file)
 	if err != nil {
 		return nil, err
 	}
@@ -85,8 +85,8 @@ func (f *finder) searchPackage(file string) (*dpkg.Package, error) {
 	return result, nil
 }
 
-func realpath(file rootfs.Path) (string, error) {
-	stat, err := os.Stat(file.Abs())
+func (f *finder) realpath(file rootfs.Path) (string, error) {
+	stat, err := fs.Stat(f.FS, file.Path())
 	if err != nil {
 		return "", err
 	}
