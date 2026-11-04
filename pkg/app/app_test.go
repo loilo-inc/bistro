@@ -94,9 +94,11 @@ func TestBundleCopyFlags(t *testing.T) {
 	// Use a minimal database so CLI loading does not depend on the host's dpkg.
 	baseDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "status"), []byte("Package: base-files\nArchitecture: all\nStatus: install ok installed\n"), 0644))
-	application := &runner{app: New("v", "c", "d").(*app), di: bistro.DI{FS: os.DirFS("/")}}
+	// Bundling reads package files through DI.FS, so it must see the same database.
+	fss := testfs.Mount(os.DirFS("/"), "var/lib/dpkg", os.DirFS(baseDir))
+	application := &runner{app: New("v", "c", "d").(*app), di: bistro.DI{FS: fss}}
 	application.cwd = dir
-	application.di.Query = dpkg.NewQuery(testfs.Mount(os.DirFS("/"), "var/lib/dpkg", os.DirFS(baseDir)))
+	application.di.Query = dpkg.NewQuery(fss)
 	resolver := &fixtureResolver{t: t}
 	application.di.Ldd = resolver
 	err = application.command().Run(context.Background(), []string{
