@@ -160,6 +160,26 @@ func TestResolverNeededVariablesReuseLoadedLibrary(t *testing.T) {
 		"expand DT_NEEDED before consulting the loaded-library cache")
 }
 
+func TestResolverInterpreterLiteralDST(t *testing.T) {
+	for _, token := range []string{"$ORIGIN", "${ORIGIN}", "$LIB", "${LIB}", "$PLATFORM", "${PLATFORM}"} {
+		t.Run(token, func(t *testing.T) {
+			dir := t.TempDir()
+			loader := filepath.Join(dir, token, "loader")
+			app := filepath.Join(dir, "app")
+			elftest.WriteDynamic(t, loader)
+			elftest.Write(t, app, elftest.Fixture{Type: elf.ET_EXEC, Interp: loader})
+			libs, err := testResolver(t, ResolverOptions{
+				DstLib: "lib", DstPlatform: "x86_64",
+			}).ListObjects(rootfs.MustPath(app))
+			require.NoError(t, err)
+			require.Len(t, libs, 1)
+			require.False(t, libs[0].IsBroken())
+			require.Equal(t, loader, libs[0].Name)
+			require.Equal(t, loader, libs[0].Path.Abs())
+		})
+	}
+}
+
 func TestResolverMissingInterpreter(t *testing.T) {
 	dir := t.TempDir()
 	app := filepath.Join(dir, "app")
