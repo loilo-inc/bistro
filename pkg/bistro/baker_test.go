@@ -24,7 +24,7 @@ func TestBakerCreatesArchive(t *testing.T) {
 	d := packageFilesStub(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {owned}})
 	out := filepath.Join(dir, "rootfs.tar")
 	writeRootFSFile(t, out, "previous archive", 0644)
-	err := NewBaker(DI{FS: testFS(d), Query: d}).CreateRootFS(&BakeInput{Out: out, DpkgList: []*dpkg.Package{pkg}, Files: rootfs.MustPaths(explicit, owned, explicit)})
+	err := NewBaker(DI{FS: testFS(d), Query: d}).CreateRootFS(&BakeInput{Out: out, Packages: []*dpkg.Package{pkg}, Files: rootfs.MustPaths(explicit, owned, explicit)})
 	require.NoError(t, err)
 	entries := readBundleTar(t, out)
 	assert.Equal(t, "package data", entries[rootFSArchiveName(owned)].body)
@@ -52,7 +52,7 @@ func TestBakerSkipsMissingPackageFiles(t *testing.T) {
 	var stderr bytes.Buffer
 	out := filepath.Join(dir, "archive.tar")
 	err := NewBaker(DI{FS: testFS(d), Query: d, Logger: NewLogger(io.Discard, &stderr)}).CreateRootFS(&BakeInput{
-		Out: out, DpkgList: []*dpkg.Package{pkg},
+		Out: out, Packages: []*dpkg.Package{pkg},
 	})
 	require.NoError(t, err)
 	entries := readBundleTar(t, out)
@@ -88,7 +88,7 @@ func TestBakerFailurePreservesOutputAndRemovesTemporaryFile(t *testing.T) {
 				require.NoError(t, os.Symlink("loop", broken))
 				require.NoError(t, os.WriteFile(filepath.Join(d.baseDir, "info/example.list"), []byte(broken+"\n"), 0644))
 			}
-			input := &BakeInput{Out: out, DpkgList: []*dpkg.Package{pkg}}
+			input := &BakeInput{Out: out, Packages: []*dpkg.Package{pkg}}
 			if stage == "explicit file" {
 				input.Files = rootfs.MustPaths(filepath.Join(dir, "missing"))
 			}
@@ -144,7 +144,7 @@ func TestBakerRejectsConflictingMetadataNames(t *testing.T) {
 	writeRootFSFile(t, out, "original", 0644)
 	err := NewBaker(DI{FS: testFS(nil)}).CreateRootFS(&BakeInput{
 		Out: out,
-		DpkgList: []*dpkg.Package{
+		Packages: []*dpkg.Package{
 			testPackage(t, "library:arm64", "", "arm64", ""),
 			testPackage(t, "library:amd64", "", "amd64", ""),
 		},

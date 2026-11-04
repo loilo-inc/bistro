@@ -9,6 +9,9 @@ import (
 	"github.com/loilo-inc/bistro/pkg/rootfs"
 )
 
+// BaseFilesPackage is the Debian package bundled into every root filesystem.
+const BaseFilesPackage = "base-files"
+
 type BundleInput struct {
 	Out      string
 	Files    []rootfs.Path
@@ -72,6 +75,16 @@ func (b *bundler) Bundle(input BundleInput) error {
 		// Ignore dependent files from scans, as they will be copied
 	}
 
+	// base-files is always bundled. It provides /etc/debian_version and
+	// /etc/os-release, which vulnerability scanners (e.g. Trivy) need to detect
+	// the OS and report dpkg packages, and the FHS skeleton (/tmp, /root,
+	// usrmerge symlinks) that scratch images lack.
+	baseFiles, err := b.DI.Query.Get(BaseFilesPackage)
+	if err != nil {
+		return fmt.Errorf("%s is required for the root filesystem: %w", BaseFilesPackage, err)
+	}
+	b.addPackage(baseFiles)
+
 	for _, packageName := range input.Packages {
 		pkg, err := b.DI.Query.Get(packageName)
 		if err != nil {
@@ -98,7 +111,7 @@ func (b *bundler) Bundle(input BundleInput) error {
 
 	return baker.CreateRootFS(&BakeInput{
 		Out:      input.Out,
-		DpkgList: b.packages,
+		Packages: b.packages,
 		Files:    b.files,
 	})
 }

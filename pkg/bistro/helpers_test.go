@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -63,8 +64,30 @@ func (s stubFinder) TraceDepsForExecutable(path rootfs.Path) (*ExeTraceResult, e
 func (s stubFinder) FindPackageForExecutable(path rootfs.Path) (*dpkg.Package, error) {
 	return s.findPackage(path.Abs())
 }
+
+// A dpkg database containing only the always-bundled base-files package.
+func baseFilesQuery(t *testing.T) stubQuery {
+	t.Helper()
+	return packageFilesStub(t, nil, nil)
+}
+
 func unownedFilesQuery() stubQuery {
 	return stubQuery{lookup: func(string) (*dpkg.Package, error) { return nil, nil }}
+}
+
+// unownedFilesQuery for bundling: files are unowned, but base-files exists.
+func unownedBaseFilesQuery(t *testing.T) stubQuery {
+	t.Helper()
+	q := baseFilesQuery(t)
+	q.lookup = func(string) (*dpkg.Package, error) { return nil, nil }
+	return q
+}
+
+// DI backed by baseFilesQuery, so bundling never reads the host's dpkg database.
+func baseFilesDI(t *testing.T) DI {
+	t.Helper()
+	q := baseFilesQuery(t)
+	return DI{FS: testFS(q), Query: q}
 }
 
 func testPackage(t *testing.T, binaryName, version, arch, status string) *dpkg.Package {
@@ -114,8 +137,12 @@ func readBundleTar(t *testing.T, path string) map[string]rootFSEntry {
 }
 
 // Build a real dpkg database, preserving the package pointers used by callers.
+// base-files is added unless provided, because every bundle requires it.
 func packageFilesStub(t *testing.T, packages []*dpkg.Package, files map[string][]string) stubQuery {
 	t.Helper()
+	if !slices.ContainsFunc(packages, func(p *dpkg.Package) bool { return p.Name() == BaseFilesPackage }) {
+		packages = append(slices.Clone(packages), testPackage(t, BaseFilesPackage, "", "", ""))
+	}
 	baseDir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(baseDir, "info"), 0755))
 	var status strings.Builder
