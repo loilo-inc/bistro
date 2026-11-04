@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/loilo-inc/bistro/pkg/internal/testfs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,19 +64,21 @@ func TestParseLdSoCacheInvalid(t *testing.T) {
 }
 
 func TestCacheLoadFailures(t *testing.T) {
-	var cache LdCache
-	path := filepath.Join(t.TempDir(), "cache")
-	require.NoError(t, cache.load(path))
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ld.so.cache")
+	cache := NewLdCache(testfs.Mount(os.DirFS("/"), "etc", os.DirFS(dir))).(*ldCache)
+	require.NoError(t, cache.Load())
 	resolved, ok := cache.ResolveLibrary("missing.so", kABIFlagX86_64_Glibc6)
 	require.Empty(t, resolved)
 	require.False(t, ok)
 	require.NoError(t, os.WriteFile(path, []byte("invalid"), 0644))
-	require.ErrorIs(t, cache.load(path), io.ErrUnexpectedEOF)
-	dir := t.TempDir()
-	err := cache.load(dir)
+	require.ErrorIs(t, cache.Load(), io.ErrUnexpectedEOF)
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, os.Mkdir(path, 0755))
+	err := cache.Load()
 	var pathErr *os.PathError
 	require.ErrorAs(t, err, &pathErr)
-	require.Equal(t, dir, pathErr.Path)
+	require.Equal(t, path, pathErr.Path)
 	require.ErrorIs(t, err, syscall.EISDIR)
 }
 
@@ -93,11 +96,12 @@ func TestParseLdSoCache(t *testing.T) {
 }
 
 func TestCacheReload(t *testing.T) {
-	var cache LdCache
-	path := filepath.Join(t.TempDir(), "cache")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ld.so.cache")
+	cache := NewLdCache(testfs.Mount(os.DirFS("/"), "etc", os.DirFS(dir))).(*ldCache)
 	for _, libPath := range []string{"/first/libfoo.so", "/second/libfoo.so"} {
 		require.NoError(t, os.WriteFile(path, cacheFixture(cacheRecord{"libfoo.so", libPath, 0x303}), 0644))
-		require.NoError(t, cache.load(path))
+		require.NoError(t, cache.Load())
 		resolved, ok := cache.ResolveLibrary("libfoo.so", kABIFlagX86_64_Glibc6)
 		require.True(t, ok)
 		require.Equal(t, libPath, resolved)
@@ -112,10 +116,10 @@ func TestCacheSkipsHWCapEntries(t *testing.T) {
 	)
 	// HWCap of the first entry: the glibc-hwcaps extension bit and subdirectory index 0.
 	binary.LittleEndian.PutUint64(data[48+16:], 1<<62)
-	path := filepath.Join(t.TempDir(), "cache")
+	path := filepath.Join(t.TempDir(), "ld.so.cache")
 	require.NoError(t, os.WriteFile(path, data, 0644))
-	var cache LdCache
-	require.NoError(t, cache.load(path))
+	cache := NewLdCache(testfs.Mount(os.DirFS("/"), "etc", os.DirFS(filepath.Dir(path)))).(*ldCache)
+	require.NoError(t, cache.Load())
 	resolved, ok := cache.ResolveLibrary("libfoo.so", kABIFlagX86_64_Glibc6)
 	require.True(t, ok)
 	require.Equal(t, "/lib/libfoo.so", resolved)

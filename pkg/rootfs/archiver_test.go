@@ -76,7 +76,7 @@ func TestArchiverAdd(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var out bytes.Buffer
-			root := NewArchiver(&out)
+			root := NewArchiver(os.DirFS("/"), &out)
 			require.NoError(t, root.Add(MustPath(tt.path), tt.content, tt.mode))
 			// A following entry verifies that the content size and tar padding
 			// do not corrupt the next file.
@@ -119,7 +119,7 @@ func TestArchiverAddWriteErrors(t *testing.T) {
 		{"content", rootFSContentFailWriter{content: content, err: want}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			root := NewArchiver(tt.writer)
+			root := NewArchiver(os.DirFS("/"), tt.writer)
 			assert.ErrorIs(t, root.Add(MustPath("file"), content, 0644), want)
 		})
 	}
@@ -133,7 +133,7 @@ func TestArchiverFilesAndDirectories(t *testing.T) {
 	writeRootFSFile(t, second, "data\n", 0640)
 	require.NoError(t, os.Chmod(filepath.Dir(first), 0750))
 	var out bytes.Buffer
-	root := NewArchiver(&out)
+	root := NewArchiver(os.DirFS("/"), &out)
 	for _, name := range []string{first, second, first, filepath.Dir(first)} {
 		require.NoError(t, root.Copy(MustPath(name)))
 	}
@@ -200,7 +200,7 @@ func TestArchiverSymlinks(t *testing.T) {
 			}
 			requested := filepath.Join(dir, "alias", remaining)
 			var out bytes.Buffer
-			root := NewArchiver(&out)
+			root := NewArchiver(os.DirFS("/"), &out)
 			for _, name := range []string{requested, requested, file} {
 				require.NoError(t, root.Copy(MustPath(name)))
 			}
@@ -230,7 +230,7 @@ func TestArchiverSymlinks(t *testing.T) {
 }
 
 func TestArchiverSpecialFilePattern(t *testing.T) {
-	pat := NewArchiver(io.Discard).(*archiver).spFilePat
+	pat := NewArchiver(os.DirFS("/"), io.Discard).(*archiver).spFilePat
 	for _, name := range []string{"/proc", "/proc/self/fd/1", "/sys", "/sys/class/net"} {
 		assert.True(t, pat.MatchString(name), name)
 	}
@@ -259,7 +259,7 @@ func TestArchiverStopsAtSpecialFileSymlinks(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	root := NewArchiver(&out).(*archiver)
+	root := NewArchiver(os.DirFS("/"), &out).(*archiver)
 	root.spFilePat = regexp.MustCompile("^" + regexp.QuoteMeta(dir) + `/(proc|sys)(/|$)`)
 	for _, name := range []string{
 		filepath.Join(dir, "dev", "stdout"),
@@ -286,7 +286,7 @@ func TestArchiverStopsAtSpecialFileSymlinks(t *testing.T) {
 }
 
 func TestArchiverMissingPath(t *testing.T) {
-	root := NewArchiver(io.Discard)
+	root := NewArchiver(os.DirFS("/"), io.Discard)
 	assert.ErrorIs(t, root.Copy(MustPath(filepath.Join(rootFSTempDir(t), "missing"))), os.ErrNotExist)
 	require.NoError(t, root.Close())
 }
@@ -299,7 +299,7 @@ func TestArchiverRepeatedSymlink(t *testing.T) {
 	require.NoError(t, os.Symlink(".", link))
 
 	var out bytes.Buffer
-	root := NewArchiver(&out)
+	root := NewArchiver(os.DirFS("/"), &out)
 	for range 2 {
 		require.NoError(t, root.Copy(MustPath(filepath.Join(dir, "selfdir", "selfdir", "file"))))
 	}
@@ -344,15 +344,15 @@ func TestArchiverSymlinkRootBoundary(t *testing.T) {
 			require.NoError(t, err)
 
 			var out bytes.Buffer
-			root := NewArchiver(&out).(*archiver)
+			root := NewArchiver(os.DirFS("/"), &out).(*archiver)
 			for range 2 {
 				err := root.Copy(MustPath(link).Join(tc.remaining))
 				if tc.escape {
-					require.ErrorContains(t, err, "path cannot start with '..'")
+					require.ErrorContains(t, err, "upper root symlink detected")
 				} else {
 					require.NoError(t, err)
 				}
-				require.Empty(t, root.resolving, "link resolution state must be cleared")
+				require.Zero(t, root.symlink.resolving.Size(), "link resolution state must be cleared")
 			}
 			valid := filepath.Join(dir, "valid")
 			writeRootFSFile(t, valid, "after resolution", 0644)
@@ -379,7 +379,7 @@ func TestArchiverCircularSymlinks(t *testing.T) {
 	}{
 		{name: "two links", target: "b", wantErr: "circular symlink"},
 		{name: "self link", target: "a", wantErr: "circular symlink"},
-		{name: "growing remaining path", target: "a/subdir", wantErr: "too many symlinks"},
+		{name: "growing remaining path", target: "a/subdir", wantErr: "circular symlink"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := rootFSTempDir(t)
@@ -388,7 +388,7 @@ func TestArchiverCircularSymlinks(t *testing.T) {
 			}
 			require.NoError(t, os.Symlink(tt.target, filepath.Join(dir, "a")))
 			var out bytes.Buffer
-			root := NewArchiver(&out)
+			root := NewArchiver(os.DirFS("/"), &out)
 			for range 2 {
 				require.ErrorContains(t, root.Copy(MustPath(filepath.Join(dir, "a"))), tt.wantErr)
 			}
@@ -413,12 +413,12 @@ func (w *rootFSFailWriter) Write(p []byte) (int, error) {
 func TestArchiverWriteErrors(t *testing.T) {
 	want := errors.New("write failed")
 	t.Run("Copy", func(t *testing.T) {
-		root := NewArchiver(&rootFSFailWriter{err: want})
+		root := NewArchiver(os.DirFS("/"), &rootFSFailWriter{err: want})
 		assert.ErrorIs(t, root.Copy(MustPath(rootFSTempDir(t))), want)
 	})
 	t.Run("Close", func(t *testing.T) {
 		writer := &rootFSFailWriter{}
-		root := NewArchiver(writer)
+		root := NewArchiver(os.DirFS("/"), writer)
 		file := filepath.Join(rootFSTempDir(t), "file")
 		writeRootFSFile(t, file, "content", 0644)
 		require.NoError(t, root.Copy(MustPath(file)))

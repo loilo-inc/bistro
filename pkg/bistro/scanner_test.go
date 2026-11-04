@@ -36,7 +36,7 @@ func TestScannerELFTypes(t *testing.T) {
 			path := filepath.Join(rootFSTempDir(t), "fixture")
 			writeTestELF(t, path, tt.typ, tt.interp, tt.libs...)
 			calls := 0
-			s := NewScanner(DI{Query: unownedFilesQuery(), Ldd: stubLdd(func(got string) ([]*ldd.Library, error) {
+			s := NewScanner(DI{FS: testFS(nil), Query: unownedFilesQuery(), Ldd: stubLdd(func(got string) ([]*ldd.Library, error) {
 				calls++
 				assert.Equal(t, path, got)
 				return []*ldd.Library{{Name: "missing"}}, nil
@@ -74,7 +74,7 @@ func TestScannerRecursiveAndRelativePaths(t *testing.T) {
 	writeTestELF(t, filepath.Join(dir, "nested", "object.o"), elf.ET_REL, false)
 	writeRootFSFile(t, filepath.Join(dir, "README"), "plain text", 0644)
 	writeRootFSFile(t, filepath.Join(dir, "empty"), "", 0644)
-	s := NewScanner(DI{Query: unownedFilesQuery()})
+	s := NewScanner(DI{FS: testFS(nil), Query: unownedFilesQuery()})
 	deps, err := s.Scan(rootfs.MustPath(dir))
 	require.NoError(t, err)
 	var got []string
@@ -102,7 +102,7 @@ func TestScannerSymlinks(t *testing.T) {
 	require.NoError(t, os.Symlink("nested/program", link))
 	dirlink := filepath.Join(dir, "directory")
 	require.NoError(t, os.Symlink("nested", dirlink))
-	s := NewScanner(DI{Query: unownedFilesQuery()})
+	s := NewScanner(DI{FS: testFS(nil), Query: unownedFilesQuery()})
 	deps, err := s.Scan(rootfs.MustPath(link))
 	require.NoError(t, err)
 	require.Len(t, deps, 1)
@@ -123,7 +123,7 @@ func TestScannerSymlinks(t *testing.T) {
 
 func TestScannerFailures(t *testing.T) {
 	dir := rootFSTempDir(t)
-	s := NewScanner(DI{Query: unownedFilesQuery()}).(*scanner)
+	s := NewScanner(DI{FS: testFS(nil), Query: unownedFilesQuery()}).(*scanner)
 	missing := filepath.Join(dir, "missing")
 	_, err := s.Scan(rootfs.MustPath(missing))
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -167,7 +167,7 @@ func TestScannerDependencies(t *testing.T) {
 	path := filepath.Join(rootFSTempDir(t), "program")
 	writeTestELF(t, path, elf.ET_EXEC, true)
 	want := []*ExeDependency{{Library: &ldd.Library{Name: "libfoo.so", Path: rootfs.MustPath("/lib/libfoo.so")}, Package: testPackage(t, "foo", "", "", "")}}
-	s := NewScanner(DI{Query: unownedFilesQuery()}).(*scanner)
+	s := NewScanner(DI{FS: testFS(nil), Query: unownedFilesQuery()}).(*scanner)
 	s.finder = stubFinder{findPackage: func(string) (*dpkg.Package, error) { return nil, errPackageNotFound }, trace: func(got string) (*ExeTraceResult, error) {
 		assert.Equal(t, path, got)
 		return &ExeTraceResult{Dependencies: want}, nil
@@ -191,7 +191,7 @@ func TestScannerRetriesFailedOwnerLookup(t *testing.T) {
 		}
 		return nil, nil
 	}}
-	s := NewScanner(DI{Query: d})
+	s := NewScanner(DI{FS: testFS(d), Query: d})
 	_, err := s.Scan(rootfs.MustPath(path))
 	require.ErrorIs(t, err, failure)
 	for range 2 {
@@ -211,7 +211,7 @@ func TestScannerMalformedDynamicSegment(t *testing.T) {
 		// Extend PT_DYNAMIC well past the end of file.
 		Progs: func(p []elf.Prog64) { elftest.Prog(p, elf.PT_DYNAMIC).Filesz += 1 << 20 },
 	})
-	s := NewScanner(DI{Query: unownedFilesQuery(), Ldd: ldd.NewResolver("/", ldd.ResolverOptions{})})
+	s := NewScanner(DI{FS: testFS(nil), Query: unownedFilesQuery(), Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: testFS(nil)})})
 	_, err := s.Scan(rootfs.MustPath(path))
 	require.EqualError(t, err, "[ldd/readElf] malformed ELF file: "+path+": [ldd/readDynTable] truncated PT_DYNAMIC")
 }

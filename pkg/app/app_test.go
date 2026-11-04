@@ -11,6 +11,7 @@ import (
 
 	"github.com/loilo-inc/bistro/pkg/bistro"
 	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/internal/testfs"
 	"github.com/loilo-inc/bistro/pkg/ldd"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/assert"
@@ -39,7 +40,7 @@ func TestHelpWithoutDpkgDatabase(t *testing.T) {
 	for _, command := range []string{"", "scan", "bundle"} {
 		for _, flag := range []string{"--help", "-h"} {
 			t.Run(command+"/"+flag, func(t *testing.T) {
-				query := dpkg.NewQueryWithBaseDir(t.TempDir())
+				query := dpkg.NewQuery(os.DirFS(t.TempDir()))
 				require.ErrorIs(t, query.Load(), os.ErrNotExist)
 
 				reader, writer, err := os.Pipe()
@@ -51,7 +52,7 @@ func TestHelpWithoutDpkgDatabase(t *testing.T) {
 					_ = writer.Close()
 					_ = reader.Close()
 				})
-				application := &runner{app: New("v", "c", "d").(*app), DI: bistro.DI{}}
+				application := &runner{app: New("v", "c", "d").(*app), DI: bistro.DI{FS: os.DirFS("/")}}
 				application.DI.Query = query
 				resolver := &cacheOnlyResolver{t: t}
 				application.DI.Ldd = resolver
@@ -83,9 +84,9 @@ func TestBundleCopyFlags(t *testing.T) {
 	// Use an empty database so CLI loading does not depend on the host's dpkg.
 	baseDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "status"), nil, 0644))
-	application := &runner{app: New("v", "c", "d").(*app), DI: bistro.DI{}}
+	application := &runner{app: New("v", "c", "d").(*app), DI: bistro.DI{FS: os.DirFS("/")}}
 	application.cwd = dir
-	application.DI.Query = dpkg.NewQueryWithBaseDir(baseDir)
+	application.DI.Query = dpkg.NewQuery(testfs.Mount(os.DirFS("/"), "var/lib/dpkg", os.DirFS(baseDir)))
 	resolver := &cacheOnlyResolver{t: t}
 	application.DI.Ldd = resolver
 	err = application.command().Run(context.Background(), []string{

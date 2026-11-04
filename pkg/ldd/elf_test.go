@@ -4,6 +4,7 @@ import (
 	"debug/elf"
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -37,7 +38,7 @@ func TestReadElf(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "libfoo.so")
 			entries := append(elftest.Needed("libone.so", "libtwo.so"), elftest.DynString(elf.DT_SONAME, "libfoo.so"), elftest.DynString(elf.DT_RPATH, "$PLATFORM/ignored"), elftest.DynString(elf.DT_RUNPATH, runpath))
 			elftest.WriteDynamic(t, path, entries...)
-			info, err := (&resolver{}).readElf(rootfs.MustPath(path), "lib", "")
+			info, err := (&rootResolver{resolver: &resolver{fs: os.DirFS("/"), dstLib: "lib"}}).readElf(rootfs.MustPath(path))
 			require.NoError(t, err)
 			require.Equal(t, path, info.Path.Abs())
 			require.Equal(t, kABIFlagX86_64_Glibc6, info.ldCacheABI())
@@ -54,7 +55,7 @@ func TestReadElf(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "plain.so")
 	elftest.WriteDynamic(t, path, elftest.DynString(elf.DT_RPATH, "$ORIGIN"))
-	info, err := (&resolver{}).readElf(rootfs.MustPath(path), "lib", "")
+	info, err := (&rootResolver{resolver: &resolver{fs: os.DirFS("/"), dstLib: "lib"}}).readElf(rootfs.MustPath(path))
 	require.NoError(t, err)
 	require.Empty(t, info.SONAME)
 	require.Empty(t, info.Needed)
@@ -133,7 +134,7 @@ func TestReadElfWithoutSectionHeaders(t *testing.T) {
 		elftest.DynString(elf.DT_RPATH, "/rpath"),
 		elftest.DynString(elf.DT_NEEDED, "libtwo.so"),
 	}})
-	info, err := (&resolver{}).readElf(rootfs.MustPath(path), "lib", "")
+	info, err := (&rootResolver{resolver: &resolver{fs: os.DirFS("/"), dstLib: "lib"}}).readElf(rootfs.MustPath(path))
 	require.NoError(t, err)
 	require.Equal(t, []string{"libone.so", "libtwo.so"}, info.Needed)
 	require.Equal(t, "libfoo.so", info.SONAME)
@@ -142,7 +143,7 @@ func TestReadElfWithoutSectionHeaders(t *testing.T) {
 	elftest.Write(t, path, elftest.Fixture{Header: noSections, Entries: []elftest.Dyn{
 		elftest.DynString(elf.DT_RUNPATH, "/runpath"),
 	}})
-	info, err = (&resolver{}).readElf(rootfs.MustPath(path), "lib", "")
+	info, err = (&rootResolver{resolver: &resolver{fs: os.DirFS("/"), dstLib: "lib"}}).readElf(rootfs.MustPath(path))
 	require.NoError(t, err)
 	require.True(t, info.HasRunPath)
 	require.Equal(t, rootfs.MustPaths("/runpath"), info.RunPaths)
@@ -155,7 +156,7 @@ func TestReadElfIgnoresSectionHeaders(t *testing.T) {
 		// Shrink SHT_DYNAMIC below one entry; section-based readers fail on it.
 		Sections: func(s []elf.Section64) { s[2].Size = 1 },
 	})
-	info, err := (&resolver{}).readElf(rootfs.MustPath(path), "lib", "")
+	info, err := (&rootResolver{resolver: &resolver{fs: os.DirFS("/"), dstLib: "lib"}}).readElf(rootfs.MustPath(path))
 	require.NoError(t, err)
 	require.Equal(t, []string{"libone.so"}, info.Needed)
 }
@@ -167,7 +168,7 @@ func TestReadElfWithoutDynamicSegment(t *testing.T) {
 		Header:  func(h *elf.Header64) { h.Phoff, h.Phnum = 0, 0 },
 		Entries: elftest.Needed("libone.so"),
 	})
-	info, err := (&resolver{}).readElf(rootfs.MustPath(path), "lib", "")
+	info, err := (&rootResolver{resolver: &resolver{fs: os.DirFS("/"), dstLib: "lib"}}).readElf(rootfs.MustPath(path))
 	require.NoError(t, err)
 	require.Empty(t, info.Needed, "a file without PT_DYNAMIC has no dynamic dependencies")
 	require.Empty(t, info.SONAME)
@@ -213,8 +214,8 @@ func TestReadElfMalformedDynamicSegment(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "lib.so")
 			tt.fx.Entries = elftest.Needed("libone.so")
 			elftest.Write(t, path, tt.fx)
-			_, err := (&resolver{}).readElf(rootfs.MustPath(path), "lib", "")
-			require.EqualError(t, err, tt.want)
+			_, err := (&rootResolver{resolver: &resolver{fs: os.DirFS("/"), dstLib: "lib"}}).readElf(rootfs.MustPath(path))
+			require.EqualError(t, err, "[ldd/readElf] malformed ELF file: "+path+": "+tt.want)
 		})
 	}
 }
@@ -223,7 +224,7 @@ func TestReadElfWithoutStringEntries(t *testing.T) {
 	// ld.so itself has PT_DYNAMIC but no DT_NEEDED; the string table is not needed then.
 	path := filepath.Join(t.TempDir(), "ld.so")
 	elftest.Write(t, path, elftest.Fixture{Omit: []elf.DynTag{elf.DT_STRTAB, elf.DT_STRSZ}})
-	info, err := (&resolver{}).readElf(rootfs.MustPath(path), "lib", "")
+	info, err := (&rootResolver{resolver: &resolver{fs: os.DirFS("/"), dstLib: "lib"}}).readElf(rootfs.MustPath(path))
 	require.NoError(t, err)
 	require.Empty(t, info.Needed)
 	require.Empty(t, info.SONAME)

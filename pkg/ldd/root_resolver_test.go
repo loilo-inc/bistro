@@ -162,7 +162,7 @@ func TestResolverNeededVariablesReuseLoadedLibrary(t *testing.T) {
 func TestReadElfCache(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lib.so")
 	elftest.WriteDynamic(t, path)
-	r := &rootResolver{resolver: NewResolver("/", ResolverOptions{}).(*resolver)}
+	r := &rootResolver{resolver: NewResolver(ResolverOptions{Cwd: "/", FS: os.DirFS("/")}).(*resolver)}
 	first, err := r.readElf(rootfs.MustPath(path))
 	require.NoError(t, err)
 	require.NoError(t, os.Remove(path))
@@ -173,7 +173,7 @@ func TestReadElfCache(t *testing.T) {
 
 func TestRootResolverReadElfDoesNotCacheErrors(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lib.so")
-	r := &rootResolver{resolver: NewResolver("/", ResolverOptions{}).(*resolver)}
+	r := &rootResolver{resolver: NewResolver(ResolverOptions{Cwd: "/", FS: os.DirFS("/")}).(*resolver)}
 	_, err := r.readElf(rootfs.MustPath(path))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	elftest.WriteNotELF(t, path)
