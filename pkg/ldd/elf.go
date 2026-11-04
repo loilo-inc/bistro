@@ -13,12 +13,24 @@ import (
 type elfInfo struct {
 	elf.FileHeader
 	*elfPath
+	Interp *rootfs.Path
 	Path   rootfs.Path
 	SONAME string
 	Needed []string
 }
 
 func (r *resolver) newElf(file *elf.File, path rootfs.Path, dstLib string, dstPlatform string) (*elfInfo, error) {
+
+	interpStr, err := readInterp(file)
+	if err != nil {
+		return nil, err
+	}
+
+	var interp *rootfs.Path
+	if interpStr != "" {
+		p := r.cwd.Resolve(interpStr)
+		interp = &p
+	}
 
 	dynTable, err := readDynTable(file)
 	if err != nil {
@@ -39,6 +51,7 @@ func (r *resolver) newElf(file *elf.File, path rootfs.Path, dstLib string, dstPl
 	}
 	return &elfInfo{
 		elfPath:    elfPath,
+		Interp:     interp,
 		Path:       path,
 		SONAME:     soname,
 		Needed:     dtNeeded,
@@ -133,6 +146,22 @@ func (e *elfInfo) ldCacheABI() cacheABI {
 	default:
 		return 0
 	}
+}
+
+func readInterp(f *elf.File) (string, error) {
+	for _, p := range f.Progs {
+		if p.Type == elf.PT_INTERP {
+			data, err := io.ReadAll(p.Open())
+			if err != nil {
+				return "", err
+			}
+			if len(data) == 0 || data[len(data)-1] != 0 {
+				return "", fmt.Errorf("[ldd/readInterp] unterminated interpreter string")
+			}
+			return string(data[:bytes.IndexByte(data, 0)]), nil
+		}
+	}
+	return "", nil
 }
 
 func readDynTable(f *elf.File) (map[elf.DynTag][]string, error) {

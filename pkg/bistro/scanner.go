@@ -32,9 +32,8 @@ func NewScanner(di DI) Scanner {
 }
 
 type ElfFile struct {
-	Path     rootfs.Path
-	Type     elf.Type
-	NeedsLdd bool
+	Path rootfs.Path
+	Type elf.Type
 }
 
 type ElfDependency struct {
@@ -98,14 +97,13 @@ func (s *scanner) ScanFile(file *ElfFile) (*ElfDependency, error) {
 	if selfPkg != nil {
 		result.Package = selfPkg
 	}
-	if file.NeedsLdd {
-		trace, err := s.finder.TraceDepsForExecutable(file.Path)
-		if err != nil {
-			return nil, err
-		}
-		result.Dependencies = trace.Dependencies
-		result.BrokenLibs = trace.BrokenLibs
+	trace, err := s.finder.TraceDepsForExecutable(file.Path)
+	if err != nil {
+		return nil, err
 	}
+	result.Dependencies = trace.Dependencies
+	result.BrokenLibs = trace.BrokenLibs
+
 	s.depsCache[file.Path] = result
 	return result, nil
 }
@@ -152,22 +150,12 @@ func (s *scanner) handleFile(path rootfs.Path) (*ElfFile, bool, error) {
 	defer elfFile.Close()
 	if elfFile.Type == elf.ET_EXEC || elfFile.Type == elf.ET_DYN {
 		ef := &ElfFile{
-			Path:     path,
-			Type:     elfFile.Type,
-			NeedsLdd: needsLdd(elfFile),
+			Path: path,
+			Type: elfFile.Type,
 		}
 		s.fileCache[path] = ef
 		return ef, true, nil
 	}
 	s.fileCache[path] = nil
 	return nil, false, nil
-}
-
-func needsLdd(file *elf.File) bool {
-	for _, p := range file.Progs {
-		if p.Type == elf.PT_DYNAMIC {
-			return true
-		}
-	}
-	return false
 }

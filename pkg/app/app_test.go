@@ -247,6 +247,9 @@ func TestScanOutput(t *testing.T) {
 		"lib/unowned.so":                     {Data: []byte("unowned library")},
 	}
 	resolver := &fixtureResolver{t: t, listObjects: func(path rootfs.Path) ([]*ldd.Library, error) {
+		if path == rootfs.MustPath("/workspace/tools/static") {
+			return nil, nil
+		}
 		require.Equal(t, rootfs.MustPath("/workspace/app"), path)
 		return []*ldd.Library{
 			{Name: "owned.so", Path: rootfs.MustPath("/lib/owned.so")},
@@ -279,7 +282,12 @@ func TestScanErrorsProduceNoPartialOutput(t *testing.T) {
 				"workspace/static":    {Data: (elftest.Fixture{Static: true}).Bytes()},
 				"workspace/dynamic":   {Data: (elftest.Fixture{}).Bytes()},
 			}
-			resolver := &fixtureResolver{t: t, listObjects: func(rootfs.Path) ([]*ldd.Library, error) { return nil, tc.scanErr }}
+			resolver := &fixtureResolver{t: t, listObjects: func(path rootfs.Path) ([]*ldd.Library, error) {
+				if path == rootfs.MustPath("/workspace/static") {
+					return nil, nil
+				}
+				return nil, tc.scanErr
+			}}
 			application := newFixtureRunner(t, fss, resolver)
 			output, err := captureStdout(t, func() error {
 				return application.command().Run(context.Background(), append([]string{"bistro", "scan"}, tc.args...))
@@ -315,7 +323,7 @@ func TestBundleInputFlags(t *testing.T) {
 		"--package", "alpha", "--package", "beta:arm64", "/workspace/bin/app",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, rootfs.MustPaths("/workspace/scan-one/app", "/workspace/scan-two"), scanned)
+	assert.Equal(t, rootfs.MustPaths("/workspace/bin/app", "/workspace/scan-one/app", "/workspace/scan-two"), scanned)
 	assert.Equal(t, 1, resolver.loads)
 	data, err := os.ReadFile(filepath.Join(dir, "bundle.tar"))
 	require.NoError(t, err)

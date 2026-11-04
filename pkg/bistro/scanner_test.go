@@ -18,17 +18,17 @@ import (
 
 func TestScannerELFTypes(t *testing.T) {
 	for _, tt := range []struct {
-		name             string
-		typ              elf.Type
-		interp           bool
-		libs             []string
-		include, dynamic bool
+		name    string
+		typ     elf.Type
+		interp  bool
+		libs    []string
+		include bool
 	}{
 		{name: "static executable", typ: elf.ET_EXEC, include: true},
 		{name: "static PIE", typ: elf.ET_DYN, include: true},
-		{name: "dynamic executable", typ: elf.ET_EXEC, interp: true, include: true, dynamic: true},
-		{name: "dynamic PIE", typ: elf.ET_DYN, interp: true, include: true, dynamic: true},
-		{name: "shared library without interpreter", typ: elf.ET_DYN, libs: []string{"libfoo.so.1"}, include: true, dynamic: true},
+		{name: "dynamic executable", typ: elf.ET_EXEC, interp: true, include: true},
+		{name: "dynamic PIE", typ: elf.ET_DYN, interp: true, include: true},
+		{name: "shared library without interpreter", typ: elf.ET_DYN, libs: []string{"libfoo.so.1"}, include: true},
 		{name: "object file", typ: elf.ET_REL},
 		{name: "core dump", typ: elf.ET_CORE},
 	} {
@@ -49,17 +49,13 @@ func TestScannerELFTypes(t *testing.T) {
 					continue
 				}
 				require.Len(t, deps, 1)
-				assert.Equal(t, &ElfFile{Path: rootfs.MustPath(path), Type: tt.typ, NeedsLdd: tt.dynamic}, deps[0].ElfFile)
-				if tt.dynamic {
-					assert.Equal(t, []string{"missing"}, deps[0].BrokenLibs)
-				} else {
-					assert.Empty(t, deps[0].BrokenLibs)
-				}
+				assert.Equal(t, &ElfFile{Path: rootfs.MustPath(path), Type: tt.typ}, deps[0].ElfFile)
+				assert.Equal(t, []string{"missing"}, deps[0].BrokenLibs)
 			}
-			if tt.dynamic {
+			if tt.include {
 				assert.Equal(t, 1, calls)
 			} else {
-				assert.Zero(t, calls, "static ELF must not invoke ldd")
+				assert.Zero(t, calls, "unsupported ELF types must not invoke the resolver")
 			}
 		})
 	}
@@ -74,7 +70,7 @@ func TestScannerRecursiveAndRelativePaths(t *testing.T) {
 	writeTestELF(t, filepath.Join(dir, "nested", "object.o"), elf.ET_REL, false)
 	writeRootFSFile(t, filepath.Join(dir, "README"), "plain text", 0644)
 	writeRootFSFile(t, filepath.Join(dir, "empty"), "", 0644)
-	s := NewScanner(DI{FS: testFS(nil), Query: unownedFilesQuery()})
+	s := NewScanner(DI{FS: testFS(nil), Query: unownedFilesQuery(), Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: testFS(nil)})})
 	deps, err := s.Scan(rootfs.MustPath(dir))
 	require.NoError(t, err)
 	var got []string
@@ -102,7 +98,7 @@ func TestScannerSymlinks(t *testing.T) {
 	require.NoError(t, os.Symlink("nested/program", link))
 	dirlink := filepath.Join(dir, "directory")
 	require.NoError(t, os.Symlink("nested", dirlink))
-	s := NewScanner(DI{FS: testFS(nil), Query: unownedFilesQuery()})
+	s := NewScanner(DI{FS: testFS(nil), Query: unownedFilesQuery(), Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: testFS(nil)})})
 	deps, err := s.Scan(rootfs.MustPath(link))
 	require.NoError(t, err)
 	require.Len(t, deps, 1)
@@ -123,7 +119,7 @@ func TestScannerSymlinks(t *testing.T) {
 
 func TestScannerFailures(t *testing.T) {
 	dir := rootFSTempDir(t)
-	s := NewScanner(DI{FS: testFS(nil), Query: unownedFilesQuery()}).(*scanner)
+	s := NewScanner(DI{FS: testFS(nil), Query: unownedFilesQuery(), Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: testFS(nil)})}).(*scanner)
 	missing := filepath.Join(dir, "missing")
 	_, err := s.Scan(rootfs.MustPath(missing))
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -167,7 +163,7 @@ func TestScannerDependencies(t *testing.T) {
 	path := filepath.Join(rootFSTempDir(t), "program")
 	writeTestELF(t, path, elf.ET_EXEC, true)
 	want := []*ExeDependency{{Library: &ldd.Library{Name: "libfoo.so", Path: rootfs.MustPath("/lib/libfoo.so")}, Package: testPackage(t, "foo", "", "", "")}}
-	s := NewScanner(DI{FS: testFS(nil), Query: unownedFilesQuery()}).(*scanner)
+	s := NewScanner(DI{FS: testFS(nil), Query: unownedFilesQuery(), Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: testFS(nil)})}).(*scanner)
 	s.finder = stubFinder{findPackage: func(string) (*dpkg.Package, error) { return nil, errPackageNotFound }, trace: func(got string) (*ExeTraceResult, error) {
 		assert.Equal(t, path, got)
 		return &ExeTraceResult{Dependencies: want}, nil
@@ -191,7 +187,7 @@ func TestScannerRetriesFailedOwnerLookup(t *testing.T) {
 		}
 		return nil, nil
 	}}
-	s := NewScanner(DI{FS: testFS(d), Query: d})
+	s := NewScanner(DI{FS: testFS(d), Query: d, Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: testFS(d)})})
 	_, err := s.Scan(rootfs.MustPath(path))
 	require.ErrorIs(t, err, failure)
 	for range 2 {

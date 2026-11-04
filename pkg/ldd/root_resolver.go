@@ -29,8 +29,18 @@ func (r *rootResolver) listObjects(path rootfs.Path, parentRPaths []rootfs.Path)
 	rPaths = append(rPaths, parentRPaths...)
 
 	var results []*Library
+
+	if elfInfo.Interp != nil {
+		interp, err := r.findLibrary(elfInfo.Interp.Abs(), elfInfo, rPaths)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, interp)
+	}
+
 	for _, lib := range elfInfo.Needed {
-		found, err := r.findLibrary(lib, elfInfo, rPaths)
+		expanded := expandVars(lib, elfInfo.Origin.Abs(), r.dstLib, r.dstPlatform)
+		found, err := r.findLibrary(expanded, elfInfo, rPaths)
 		if err != nil {
 			return nil, err
 		}
@@ -41,10 +51,7 @@ func (r *rootResolver) listObjects(path rootfs.Path, parentRPaths []rootfs.Path)
 	return &searchResult{libs: results, rPaths: rPaths}, nil
 }
 
-func (r *rootResolver) findLibrary(origLib string, srcElf *elfInfo, rPaths []rootfs.Path) (*Library, error) {
-
-	lib := expandVars(origLib, srcElf.Origin.Abs(), r.dstLib, r.dstPlatform)
-
+func (r *rootResolver) findLibrary(lib string, srcElf *elfInfo, rPaths []rootfs.Path) (*Library, error) {
 	// check load chache by requested library name
 	if loaded, ok := r.loaded.LookUp(lib); ok {
 		return loaded, nil

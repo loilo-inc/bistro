@@ -2,6 +2,7 @@ package ldd
 
 import (
 	"debug/elf"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -157,6 +158,63 @@ func TestResolverNeededVariablesReuseLoadedLibrary(t *testing.T) {
 	require.Equal(t, first, libs[0].Path.Abs())
 	require.Same(t, libs[0], libs[1].Deps[0],
 		"expand DT_NEEDED before consulting the loaded-library cache")
+}
+
+func TestResolverInterpreterLiteralDST(t *testing.T) {
+	for _, token := range []string{"$ORIGIN", "${ORIGIN}", "$LIB", "${LIB}", "$PLATFORM", "${PLATFORM}"} {
+		t.Run(token, func(t *testing.T) {
+			dir := t.TempDir()
+			loader := filepath.Join(dir, token, "loader")
+			app := filepath.Join(dir, "app")
+			elftest.WriteDynamic(t, loader)
+			elftest.Write(t, app, elftest.Fixture{Type: elf.ET_EXEC, Interp: loader})
+			libs, err := testResolver(t, ResolverOptions{
+				DstLib: "lib", DstPlatform: "x86_64",
+			}).ListObjects(rootfs.MustPath(app))
+			require.NoError(t, err)
+			require.Len(t, libs, 1)
+			require.False(t, libs[0].IsBroken())
+			require.Equal(t, loader, libs[0].Name)
+			require.Equal(t, loader, libs[0].Path.Abs())
+		})
+	}
+}
+
+func TestResolverMissingInterpreter(t *testing.T) {
+	dir := t.TempDir()
+	app := filepath.Join(dir, "app")
+	loader := filepath.Join(dir, "missing-loader")
+	elftest.Write(t, app, elftest.Fixture{Type: elf.ET_EXEC, Interp: loader})
+	libs, err := testResolver(t, ResolverOptions{}).ListObjects(rootfs.MustPath(app))
+	require.NoError(t, err)
+	require.Len(t, libs, 1)
+	require.Equal(t, loader, libs[0].Name)
+	require.True(t, libs[0].IsBroken())
+}
+
+func TestResolverInterpreterSONAME(t *testing.T) {
+	for _, competingLoader := range []bool{false, true} {
+		t.Run(fmt.Sprintf("competing loader=%t", competingLoader), func(t *testing.T) {
+			dir := t.TempDir()
+			app := filepath.Join(dir, "app")
+			loader := filepath.Join(dir, "custom", "loader")
+			libDir := filepath.Join(dir, "lib")
+			const soname = "ld-test.so"
+			elftest.WriteDynamic(t, loader, elftest.DynString(elf.DT_SONAME, soname))
+			if competingLoader {
+				elftest.WriteDynamic(t, filepath.Join(libDir, soname), elftest.DynString(elf.DT_SONAME, soname))
+			}
+			elftest.Write(t, app, elftest.Fixture{
+				Type: elf.ET_EXEC, Interp: loader,
+				Entries: append(elftest.Needed(soname), elftest.DynString(elf.DT_RUNPATH, libDir)),
+			})
+			libs, err := withSysLibraryPaths(testResolver(t, ResolverOptions{}), libDir).ListObjects(rootfs.MustPath(app))
+			require.NoError(t, err)
+			require.Len(t, libs, 2)
+			require.Equal(t, loader, libs[0].Path.Abs())
+			require.Same(t, libs[0], libs[1], "DT_NEEDED must reuse the interpreter by SONAME")
+		})
+	}
 }
 
 func TestReadElfCache(t *testing.T) {
