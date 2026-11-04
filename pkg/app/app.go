@@ -34,10 +34,10 @@ func New(version, commit, date string) App {
 }
 
 func (c *runner) load() error {
-	if err := c.DI.Query.Load(); err != nil {
+	if err := c.di.Query.Load(); err != nil {
 		return err
 	}
-	if err := c.DI.Ldd.Load(); err != nil {
+	if err := c.di.Ldd.Load(); err != nil {
 		return err
 	}
 	return nil
@@ -103,8 +103,8 @@ func (c *runner) command() *cli.Command {
 }
 
 type runner struct {
-	bistro.DI
 	*app
+	di  bistro.DI
 	cwd string
 }
 
@@ -122,7 +122,7 @@ func (c *app) Run(ctx context.Context, args []string) error {
 	query := dpkg.NewQuery(fs)
 	logger := bistro.NewLogger(os.Stdout, os.Stderr)
 	r := &runner{
-		DI: bistro.DI{
+		di: bistro.DI{
 			Query:  query,
 			Ldd:    ldd,
 			Logger: logger,
@@ -135,7 +135,7 @@ func (c *app) Run(ctx context.Context, args []string) error {
 }
 
 func (c *runner) scan(paths ...rootfs.Path) error {
-	scanner := bistro.NewScanner(c.DI)
+	scanner := bistro.NewScanner(c.di)
 	var elfDeps []*bistro.ElfDependency
 	for _, path := range paths {
 		deps, err := scanner.Scan(path)
@@ -161,7 +161,7 @@ func (c *runner) scan(paths ...rootfs.Path) error {
 }
 
 func (c *runner) bundle(input bistro.BundleInput) error {
-	bundler := bistro.NewBundler(c.DI)
+	bundler := bistro.NewBundler(c.di)
 	return bundler.Bundle(input)
 }
 

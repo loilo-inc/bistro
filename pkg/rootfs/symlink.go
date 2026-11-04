@@ -25,7 +25,20 @@ func newSymlinkResolver(fs fs.FS) *symlinkResolver {
 
 var errVisitCanceld = errors.New("visit cancelled")
 
+type pathResolution struct {
+	path  *Path
+	lstat fs.FileInfo
+}
+
 func (r *symlinkResolver) Resolve(path Path) (*Path, error) {
+	resolved, err := r.resolve(path)
+	if err != nil {
+		return nil, err
+	}
+	return resolved.path, nil
+}
+
+func (r *symlinkResolver) resolve(path Path) (*pathResolution, error) {
 	if r.onStart != nil && !r.onStart(path) {
 		return nil, errVisitCanceld
 	}
@@ -44,7 +57,11 @@ func (r *symlinkResolver) Resolve(path Path) (*Path, error) {
 			return resolved, nil
 		}
 	}
-	return &path, nil
+	lstat, err := fs.Lstat(r.fs, path.Path())
+	if err != nil {
+		return nil, err
+	}
+	return &pathResolution{path: &path, lstat: lstat}, nil
 }
 
 func (r *symlinkResolver) Visit(
@@ -65,7 +82,7 @@ func (r *symlinkResolver) Visit(
 	return err
 }
 
-func (r *symlinkResolver) handleSubdir(file Path, origPath Path) (bool, *Path, error) {
+func (r *symlinkResolver) handleSubdir(file Path, origPath Path) (bool, *pathResolution, error) {
 	lstat, err := fs.Lstat(r.fs, file.Path())
 	if err != nil {
 		return false, nil, err
@@ -90,10 +107,10 @@ func (r *symlinkResolver) handleSubdir(file Path, origPath Path) (bool, *Path, e
 	if err := r.callOnVisit(file, "", lstat); err != nil {
 		return false, nil, err
 	}
-	return false, &file, nil
+	return false, &pathResolution{path: &file, lstat: lstat}, nil
 }
 
-func (r *symlinkResolver) handleLink(file Path, link string, remaining string) (*Path, error) {
+func (r *symlinkResolver) handleLink(file Path, link string, remaining string) (*pathResolution, error) {
 	state := resolvingState{path: file, remaining: remaining}
 	if r.resolving.Has(state) {
 		return nil, fmt.Errorf("circular symlink detected: %s -> %s", file.Abs(), link)
@@ -108,11 +125,12 @@ func (r *symlinkResolver) handleLink(file Path, link string, remaining string) (
 	if err != nil {
 		return nil, err
 	}
-	return r.Resolve(target.Join(remaining))
+	return r.resolve(target.Join(remaining))
 }
 
 func (r *symlinkResolver) walk(dir Path, link string) (*Path, error) {
 	var curr Path
+	var currIsDir = true
 	if path.IsAbs(link) {
 		curr = MustPath("/")
 	} else {
@@ -121,21 +139,29 @@ func (r *symlinkResolver) walk(dir Path, link string) (*Path, error) {
 	for comp := range strings.SplitSeq(link, "/") {
 		switch comp {
 		case "", ".":
+			if !currIsDir {
+				return nil, fmt.Errorf("[rootfs/symlink] upper non-directory symlink detected: %s", curr.Abs())
+			}
 			// skip
 		case "..":
+			if !currIsDir {
+				return nil, fmt.Errorf("[rootfs/symlink] upper non-directory symlink detected: %s", curr.Abs())
+			}
 			if curr.Abs() == "/" {
 				return nil, fmt.Errorf("[rootfs/symlink] upper root symlink detected: %s", curr.Abs())
 			}
-			if v, err := r.Resolve(curr.Dir()); err != nil {
+			if v, err := r.resolve(curr.Dir()); err != nil {
 				return nil, err
 			} else {
-				curr = *v
+				curr = *v.path
+				currIsDir = v.lstat.IsDir()
 			}
 		default:
-			if v, err := r.Resolve(curr.Join(comp)); err != nil {
+			if v, err := r.resolve(curr.Join(comp)); err != nil {
 				return nil, err
 			} else {
-				curr = *v
+				curr = *v.path
+				currIsDir = v.lstat.IsDir()
 			}
 		}
 	}

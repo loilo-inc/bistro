@@ -36,6 +36,63 @@ func TestRealPathResolvesLinksBeforeParentTraversal(t *testing.T) {
 	}
 }
 
+func TestSymlinkTargetDirectorySuffix(t *testing.T) {
+	for _, prefix := range []string{"", "/"} {
+		for _, target := range []struct {
+			name, resolved string
+			isDir          bool
+		}{
+			{name: "file", resolved: "file"},
+			{name: "file-link", resolved: "file"},
+			{name: "dir/child", resolved: "dir/child", isDir: true},
+			{name: "dir-link", resolved: "dir/child", isDir: true},
+		} {
+			for _, suffix := range []struct {
+				value  string
+				parent bool
+			}{
+				{value: "/"},
+				{value: "/."},
+				{value: "/./"},
+				{value: "/..", parent: true},
+				{value: "/../", parent: true},
+			} {
+				link := prefix + target.name + suffix.value
+				t.Run(link, func(t *testing.T) {
+					fss := fstest.MapFS{
+						"alias":     {Mode: fs.ModeSymlink | 0777, Data: []byte(link)},
+						"file":      {Mode: 0644, Data: []byte("data")},
+						"file-link": {Mode: fs.ModeSymlink | 0777, Data: []byte("file")},
+						"dir/child": {Mode: fs.ModeDir | 0755},
+						"dir-link":  {Mode: fs.ModeSymlink | 0777, Data: []byte("dir/child")},
+					}
+					resolved, resolveErr := MustPath("alias").RealPath(fss)
+					var out bytes.Buffer
+					a := NewArchiver(fss, &out)
+					copyErr := a.Copy(MustPath("alias"))
+					require.NoError(t, a.Close())
+					if !target.isDir {
+						require.ErrorContains(t, resolveErr, "non-directory")
+						require.Nil(t, resolved)
+						require.ErrorContains(t, copyErr, "non-directory")
+						return
+					}
+					require.NoError(t, resolveErr)
+					require.NoError(t, copyErr)
+					want := MustPath(target.resolved)
+					if suffix.parent {
+						want = want.Dir()
+					}
+					require.Equal(t, want, *resolved)
+					entries := readRootFSTar(t, out.Bytes())
+					require.Contains(t, entries, want.TarName())
+					require.Equal(t, link, entries["alias"].header.Linkname)
+				})
+			}
+		}
+	}
+}
+
 func TestRealPathSymlinkLimit(t *testing.T) {
 	fss := fstest.MapFS{}
 	for i := 0; i < 257; i++ {
