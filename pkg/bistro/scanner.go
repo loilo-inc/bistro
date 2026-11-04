@@ -138,7 +138,12 @@ func (s *scanner) handleFile(path rootfs.Path) (*ElfFile, bool, error) {
 	if cache, ok := s.fileCache[path]; ok {
 		return cache, cache != nil, nil
 	}
-	elfFile, err := elf.Open(path.Path())
+	file, err := s.FS.Open(path.Path())
+	if err != nil {
+		return nil, false, err
+	}
+	defer file.Close()
+	elfFile, err := elf.NewFile(&rootfs.FsReaderAt{File: file})
 	if _, ok := err.(*elf.FormatError); ok {
 		return nil, false, nil
 	} else if err != nil {

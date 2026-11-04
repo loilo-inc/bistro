@@ -2,6 +2,7 @@ package rootfs
 
 import (
 	"fmt"
+	"io/fs"
 	"path"
 	"strings"
 )
@@ -93,4 +94,8 @@ func (p Path) TarName() string {
 		return "."
 	}
 	return v
+}
+
+func (p Path) RealPath(fss fs.FS) (*Path, error) {
+	return newSymlinkResolver(fss).Resolve(p)
 }

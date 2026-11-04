@@ -49,7 +49,7 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 			os.Remove(tmpFile.Name())
 		}
 	}()
-	rootfs := rootfs.NewArchiver(tmpFile)
+	rootfs := rootfs.NewArchiver(b.FS, tmpFile)
 	for _, pkg := range input.DpkgList {
 		if err := b.writePackageMetadata(rootfs, pkg); err != nil {
 			return err
