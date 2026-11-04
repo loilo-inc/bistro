@@ -81,10 +81,10 @@ func (b *bundler) Bundle(input BundleInput) error {
 	// usrmerge symlinks) that scratch images lack.
 	baseFiles, err := b.DI.Query.Get(baseFilesPackage)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s is required for the root filesystem: %w", baseFilesPackage, err)
 	}
 	if baseFiles.Status().Current != dpkg.StatusInstalled {
-		return fmt.Errorf("%s is required for the root filesystem", baseFilesPackage)
+		return fmt.Errorf("%s is required for the root filesystem: status=%s", baseFilesPackage, baseFiles.Status().Current)
 	}
 	b.addPackage(baseFiles)
 

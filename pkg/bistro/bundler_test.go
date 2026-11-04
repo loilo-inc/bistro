@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"debug/elf"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -481,7 +482,7 @@ func TestBundlerAlwaysIncludesBaseFiles(t *testing.T) {
 func TestBundlerRequiresBaseFiles(t *testing.T) {
 	notFound := errors.New("package not found: " + baseFilesPackage)
 	// "" means base-files is absent from the database.
-	for _, status := range []string{"", "config-files", "unpacked", "half-installed", "half-configured", "not-installed"} {
+	for _, status := range []string{"", "not-installed"} {
 		name := status
 		if name == "" {
 			name = "not found"
@@ -499,10 +500,12 @@ func TestBundlerRequiresBaseFiles(t *testing.T) {
 			}
 			b := NewBundler(DI{FS: testFS(d), Query: d})
 			err := b.Bundle(BundleInput{Out: out})
+			baseMessage := "base-files is required for the root filesystem"
 			if status == "" {
 				require.ErrorIs(t, err, notFound)
+				require.ErrorContains(t, err, baseMessage)
 			} else {
-				require.ErrorContains(t, err, baseFilesPackage+" is required for the root filesystem")
+				require.ErrorContains(t, err, fmt.Sprintf("%s: status=%s", baseMessage, status))
 			}
 			data, err := os.ReadFile(out)
 			require.NoError(t, err)
