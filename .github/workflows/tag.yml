@@ -9,7 +9,7 @@ permissions:
   packages: write
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,17 +29,51 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+  build_docker:
+    needs: release
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-26.04
+          - arch: arm64
+            runner: ubuntu-26.04-arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Release(Docker)
+      - name: Build and push Docker image
         run: |
-          IMAGE=ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          REF_NO_HEAD_V=${GITHUB_REF_NAME#v}
+          IMAGE=ghcr.io/${{ github.repository }}:${REF_NO_HEAD_V}-${{ matrix.arch }}
           make build IMAGE="$IMAGE" \
-            VERSION="${GITHUB_REF_NAME}" \
+            VERSION="$REF_NO_HEAD_V" \
             COMMIT="${GITHUB_SHA}" \
             DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          docker run --rm "$IMAGE" --version
           docker push "$IMAGE"
+  manifest:
+    needs: build_docker
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create and push manifest
+        run: |
+          REF_NO_HEAD_V=${GITHUB_REF_NAME#v}
+          IMAGE=ghcr.io/${{ github.repository }}
+          docker buildx imagetools create \
+            -t "${IMAGE}:${REF_NO_HEAD_V}" \
+            -t "${IMAGE}:latest" \
+            "${IMAGE}:${REF_NO_HEAD_V}-amd64" \
+            "${IMAGE}:${REF_NO_HEAD_V}-arm64"
+          docker buildx imagetools inspect "${IMAGE}:${REF_NO_HEAD_V}"
