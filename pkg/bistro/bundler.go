@@ -136,6 +136,7 @@ func (b *bundler) addDependency(deps ...*ElfDependency) {
 			b.addPackage(dep.Package)
 		}
 		for _, exeDep := range dep.Dependencies {
+			b.files = append(b.files, exeDep.Library.Path)
 			if exeDep.Package != nil {
 				b.addPackage(exeDep.Package)
 			}

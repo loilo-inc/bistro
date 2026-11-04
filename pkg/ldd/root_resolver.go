@@ -29,6 +29,14 @@ func (r *rootResolver) listObjects(path rootfs.Path, parentRPaths []rootfs.Path)
 	rPaths = append(rPaths, parentRPaths...)
 
 	var results []*Library
+
+	if elfInfo.Interp != nil {
+		results = append(results, &Library{
+			Name: elfInfo.Interp.Abs(),
+			Path: *elfInfo.Interp,
+		})
+	}
+
 	for _, lib := range elfInfo.Needed {
 		found, err := r.findLibrary(lib, elfInfo, rPaths)
 		if err != nil {

@@ -19,9 +19,11 @@ func TestBundlerMergesInputs(t *testing.T) {
 	dir := rootFSTempDir(t)
 	file, scan := filepath.Join(dir, "program"), filepath.Join(dir, "extension.so")
 	owned := filepath.Join(dir, "library.so")
+	unowned := filepath.Join(dir, "unowned.so")
 	writeRootFSFile(t, file, "program", 0755)
 	writeRootFSFile(t, scan, "scan target", 0644)
 	writeRootFSFile(t, owned, "shared library", 0644)
+	writeRootFSFile(t, unowned, "unowned library", 0644)
 	pkg := testPackage(t, "library:arm64", "", "", dpkg.StatusInstalled)
 	other := testPackage(t, "other:arm64", "", "", dpkg.StatusInstalled)
 	d := packageFilesStub(t, []*dpkg.Package{pkg, other}, map[string][]string{pkg.NameWithArch(): {owned}})
@@ -35,7 +37,14 @@ func TestBundlerMergesInputs(t *testing.T) {
 	var scanned []string
 	b.scanner = stubScanner(func(path string) ([]*ElfDependency, error) {
 		scanned = append(scanned, path)
-		return []*ElfDependency{{ElfFile: &ElfFile{Path: rootfs.MustPath(path)}, Dependencies: []*ExeDependency{{Library: &ldd.Library{Path: rootfs.MustPath("/lib/unowned.so")}}, {Package: pkg}, {Package: testPackage(t, pkg.NameWithArch(), pkg.Version(), pkg.Architecture(), pkg.Status().Current)}}}}, nil
+		return []*ElfDependency{{
+			ElfFile: &ElfFile{Path: rootfs.MustPath(path)},
+			Dependencies: []*ExeDependency{
+				{Library: &ldd.Library{Path: rootfs.MustPath(unowned)}},
+				{Library: &ldd.Library{Path: rootfs.MustPath(owned)}, Package: pkg},
+				{Library: &ldd.Library{Path: rootfs.MustPath(owned)}, Package: testPackage(t, pkg.NameWithArch(), pkg.Version(), pkg.Architecture(), pkg.Status().Current)},
+			},
+		}}, nil
 	})
 	out := filepath.Join(dir, "bundle.tar")
 	require.NoError(t, b.Bundle(BundleInput{Out: out, Files: rootfs.MustPaths(file, file), Scans: rootfs.MustPaths(scan), Packages: []string{pkg.NameWithArch(), other.NameWithArch()}}))
@@ -44,6 +53,7 @@ func TestBundlerMergesInputs(t *testing.T) {
 	entries := readBundleTar(t, out)
 	assert.Contains(t, entries, rootFSArchiveName(file))
 	assert.Contains(t, entries, rootFSArchiveName(owned))
+	assert.Equal(t, "unowned library", entries[rootFSArchiveName(unowned)].body)
 	assert.NotContains(t, entries, rootFSArchiveName(scan))
 	assert.Contains(t, entries, "var/lib/dpkg/status.d/library")
 	assert.Contains(t, entries, "var/lib/dpkg/status.d/other")
@@ -199,7 +209,7 @@ func TestBundlerFailures(t *testing.T) {
 				case "broken library":
 					return []*ElfDependency{{ElfFile: &ElfFile{Path: rootfs.MustPath(path)}, BrokenLibs: []string{"libmissing.so"}}}, nil
 				case "uninstalled dependency":
-					return []*ElfDependency{{ElfFile: &ElfFile{Path: rootfs.MustPath(path)}, Dependencies: []*ExeDependency{{Package: testPackage(t, "broken", "", "", "unpacked")}}}}, nil
+					return []*ElfDependency{{ElfFile: &ElfFile{Path: rootfs.MustPath(path)}, Dependencies: []*ExeDependency{{Library: &ldd.Library{Path: rootfs.MustPath(filepath.Join(dir, "library.so"))}, Package: testPackage(t, "broken", "", "", "unpacked")}}}}, nil
 				case "uninstalled target package":
 					return []*ElfDependency{{ElfFile: &ElfFile{Path: rootfs.MustPath(path)}, Package: testPackage(t, "broken", "", "", "unpacked")}}, nil
 				}
