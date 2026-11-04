@@ -50,7 +50,7 @@ func TestBundlerMergesInputs(t *testing.T) {
 	out := filepath.Join(dir, "bundle.tar")
 	require.NoError(t, b.Bundle(BundleInput{Out: out, Files: rootfs.MustPaths(file, file), Scans: rootfs.MustPaths(scan), Packages: []string{pkg.NameWithArch(), other.NameWithArch()}}))
 	assert.Equal(t, []string{file, file, scan}, scanned)
-	assert.Equal(t, []string{BaseFilesPackage, pkg.NameWithArch(), other.NameWithArch()}, requested)
+	assert.Equal(t, []string{baseFilesPackage, pkg.NameWithArch(), other.NameWithArch()}, requested)
 	entries := readBundleTar(t, out)
 	assert.Contains(t, entries, rootFSArchiveName(file))
 	assert.Contains(t, entries, rootFSArchiveName(owned))
@@ -462,33 +462,51 @@ func TestBundlerAlwaysIncludesBaseFiles(t *testing.T) {
 			dir := rootFSTempDir(t)
 			version := filepath.Join(dir, "etc", "debian_version")
 			writeRootFSFile(t, version, "13.7\n", 0644)
-			baseFiles := testPackage(t, BaseFilesPackage+":arm64", "13.8", "", dpkg.StatusInstalled)
+			baseFiles := testPackage(t, baseFilesPackage+":arm64", "13.8", "", dpkg.StatusInstalled)
 			d := packageFilesStub(t, []*dpkg.Package{baseFiles}, map[string][]string{baseFiles.NameWithArch(): {version}})
 			input := BundleInput{Out: filepath.Join(dir, "bundle.tar")}
 			if explicit {
 				// An explicit request must not duplicate the implicit one.
-				input.Packages = []string{BaseFilesPackage}
+				input.Packages = []string{baseFilesPackage}
 			}
 			require.NoError(t, NewBundler(DI{FS: testFS(d), Query: d}).Bundle(input))
 			entries := readBundleTar(t, input.Out) // Also rejects duplicate tar entries.
 			assert.Equal(t, "13.7\n", entries[rootFSArchiveName(version)].body)
-			assert.Contains(t, entries["var/lib/dpkg/status.d/"+BaseFilesPackage].body, "Package: "+BaseFilesPackage)
-			assert.Contains(t, entries, "var/lib/dpkg/status.d/"+BaseFilesPackage+".md5sums")
+			assert.Contains(t, entries["var/lib/dpkg/status.d/"+baseFilesPackage].body, "Package: "+baseFilesPackage)
+			assert.Contains(t, entries, "var/lib/dpkg/status.d/"+baseFilesPackage+".md5sums")
 		})
 	}
 }
 
 func TestBundlerRequiresBaseFiles(t *testing.T) {
-	dir := rootFSTempDir(t)
-	out := filepath.Join(dir, "bundle.tar")
-	writeRootFSFile(t, out, "original", 0644)
-	notFound := errors.New("package not found: " + BaseFilesPackage)
-	d := packageFilesStub(t, nil, nil)
-	d.get = func(string) (*dpkg.Package, error) { return nil, notFound }
-	err := NewBundler(DI{FS: testFS(d), Query: d}).Bundle(BundleInput{Out: out})
-	require.ErrorIs(t, err, notFound)
-	assert.ErrorContains(t, err, BaseFilesPackage+" is required for the root filesystem")
-	data, err := os.ReadFile(out)
-	require.NoError(t, err)
-	assert.Equal(t, "original", string(data))
+	notFound := errors.New("package not found: " + baseFilesPackage)
+	// "" means base-files is absent from the database.
+	for _, status := range []string{"", "config-files", "unpacked", "half-installed", "half-configured", "not-installed"} {
+		name := status
+		if name == "" {
+			name = "not found"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := rootFSTempDir(t)
+			out := filepath.Join(dir, "bundle.tar")
+			writeRootFSFile(t, out, "original", 0644)
+			d := packageFilesStub(t, nil, nil)
+			if status == "" {
+				d.get = func(string) (*dpkg.Package, error) { return nil, notFound }
+			} else {
+				baseFiles := testPackage(t, baseFilesPackage, "", "", status)
+				d.get = func(string) (*dpkg.Package, error) { return baseFiles, nil }
+			}
+			b := NewBundler(DI{FS: testFS(d), Query: d})
+			err := b.Bundle(BundleInput{Out: out})
+			if status == "" {
+				require.ErrorIs(t, err, notFound)
+			} else {
+				require.ErrorContains(t, err, baseFilesPackage+" is required for the root filesystem")
+			}
+			data, err := os.ReadFile(out)
+			require.NoError(t, err)
+			assert.Equal(t, "original", string(data))
+		})
+	}
 }

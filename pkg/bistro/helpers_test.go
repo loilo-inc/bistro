@@ -140,8 +140,8 @@ func readBundleTar(t *testing.T, path string) map[string]rootFSEntry {
 // base-files is added unless provided, because every bundle requires it.
 func packageFilesStub(t *testing.T, packages []*dpkg.Package, files map[string][]string) stubQuery {
 	t.Helper()
-	if !slices.ContainsFunc(packages, func(p *dpkg.Package) bool { return p.Name() == BaseFilesPackage }) {
-		packages = append(slices.Clone(packages), testPackage(t, BaseFilesPackage, "", "", ""))
+	if !slices.ContainsFunc(packages, func(p *dpkg.Package) bool { return p.Name() == baseFilesPackage }) {
+		packages = append(slices.Clone(packages), testPackage(t, baseFilesPackage, "", "", ""))
 	}
 	baseDir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(baseDir, "info"), 0755))
