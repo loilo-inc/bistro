@@ -1,6 +1,7 @@
 package ldd
 
 import (
+	"io/fs"
 	"path"
 	"runtime"
 
@@ -21,12 +22,14 @@ type resolver struct {
 	dstPlatform     string
 	elfCache        util.Map[rootfs.Path, *elfInfo]
 	ldSoCache       LdCache
+	fs              fs.FS
 }
 
 var _ Resolver = (*resolver)(nil)
 
 type ResolverOptions struct {
 	Cwd           string
+	FS            fs.FS
 	LdLibraryPath string
 	// $LIB Dynamic String Token
 	DstLib string
@@ -34,7 +37,7 @@ type ResolverOptions struct {
 	DstPlatform string
 }
 
-func NewResolver(cwd string, input ResolverOptions) Resolver {
+func NewResolver(input ResolverOptions) Resolver {
 	if input.DstLib == "" {
 		input.DstLib = getDstLib(runtime.GOARCH)
 	}
@@ -52,11 +55,13 @@ func NewResolver(cwd string, input ResolverOptions) Resolver {
 		"/lib", "/usr/lib", "/lib64", "/usr/lib64",
 	)
 	return &resolver{
-		cwd:             rootfs.MustPath(cwd),
+		cwd:             rootfs.MustPath(input.Cwd),
 		ldLibraryPath:   input.LdLibraryPath,
 		sysLibraryPaths: rootfs.MustPaths(sysLibraryPath...),
 		dstLib:          input.DstLib,
 		dstPlatform:     input.DstPlatform,
+		ldSoCache:       NewLdCache(input.FS),
+		fs:              input.FS,
 	}
 }
 

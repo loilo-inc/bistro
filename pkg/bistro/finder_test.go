@@ -28,7 +28,7 @@ func TestFinderTraceDependencies(t *testing.T) {
 		return pkg, nil
 	}}
 	libs := []*ldd.Library{{Name: "one", Path: rootfs.MustPath(alias)}, {Name: "alias", Path: rootfs.MustPath(first)}, {Name: "missing"}, {Name: "two", Path: rootfs.MustPath(second)}}
-	f := NewFinder(DI{Query: q, Ldd: stubLdd(func(path string) ([]*ldd.Library, error) {
+	f := NewFinder(DI{FS: testFS(q), Query: q, Ldd: stubLdd(func(path string) ([]*ldd.Library, error) {
 		lddCalls++
 		assert.Contains(t, []string{"/bin/one", "/bin/two"}, path)
 		return libs, nil
@@ -65,7 +65,7 @@ func TestFinderFailures(t *testing.T) {
 				path = "/bin/app"
 			}
 			q := stubQuery{lookup: func(string) (*dpkg.Package, error) { return nil, tc.lookupErr }}
-			f := NewFinder(DI{Query: q, Ldd: stubLdd(func(string) ([]*ldd.Library, error) { return []*ldd.Library{{Path: rootfs.MustPath(lib)}}, tc.lddErr })})
+			f := NewFinder(DI{FS: testFS(q), Query: q, Ldd: stubLdd(func(string) ([]*ldd.Library, error) { return []*ldd.Library{{Path: rootfs.MustPath(lib)}}, tc.lddErr })})
 			result, err := f.TraceDepsForExecutable(rootfs.MustPath(path))
 			assert.Nil(t, result)
 			require.ErrorContains(t, err, tc.want)
@@ -91,7 +91,7 @@ func TestFinderRetriesFailedCommands(t *testing.T) {
 				}
 				return pkg, nil
 			}}
-			f := NewFinder(DI{Query: q, Ldd: stubLdd(func(string) ([]*ldd.Library, error) {
+			f := NewFinder(DI{FS: testFS(q), Query: q, Ldd: stubLdd(func(string) ([]*ldd.Library, error) {
 				if fail("ldd") {
 					return nil, failure
 				}
@@ -116,7 +116,7 @@ func TestFinderUnownedLibrary(t *testing.T) {
 		assert.Equal(t, lib, path)
 		return nil, nil
 	}}
-	f := NewFinder(DI{Query: q, Ldd: stubLdd(func(string) ([]*ldd.Library, error) { return []*ldd.Library{library}, nil })})
+	f := NewFinder(DI{FS: testFS(q), Query: q, Ldd: stubLdd(func(string) ([]*ldd.Library, error) { return []*ldd.Library{library}, nil })})
 	result, err := f.TraceDepsForExecutable(rootfs.MustPath("/bin/app"))
 	require.NoError(t, err)
 	assert.Empty(t, result.BrokenLibs)

@@ -2,8 +2,7 @@ package bistro
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
+	"io/fs"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/ldd"
@@ -48,11 +47,11 @@ func (f *finder) TraceDepsForExecutable(file rootfs.Path) (*ExeTraceResult, erro
 	result.BrokenLibs = append(result.BrokenLibs, broken...)
 
 	for _, lib := range uniqueLibs {
-		realpath, err := realpath(lib.Path)
+		realpath, err := f.realpath(lib.Path)
 		if err != nil {
 			return nil, err
 		}
-		pkg, err := f.searchPackage(realpath)
+		pkg, err := f.searchPackage(realpath.Abs())
 		if err != nil && err != errPackageNotFound {
 			return nil, err
 		}
@@ -65,11 +64,11 @@ func (f *finder) TraceDepsForExecutable(file rootfs.Path) (*ExeTraceResult, erro
 }
 
 func (b *finder) FindPackageForExecutable(file rootfs.Path) (*dpkg.Package, error) {
-	realpath, err := realpath(file)
+	realpath, err := b.realpath(file)
 	if err != nil {
 		return nil, err
 	}
-	return b.searchPackage(realpath)
+	return b.searchPackage(realpath.Abs())
 }
 
 var errPackageNotFound = errors.New("package not found")
@@ -85,17 +84,17 @@ func (f *finder) searchPackage(file string) (*dpkg.Package, error) {
 	return result, nil
 }
 
-func realpath(file rootfs.Path) (string, error) {
-	stat, err := os.Stat(file.Abs())
+func (f *finder) realpath(file rootfs.Path) (*rootfs.Path, error) {
+	real, err := file.RealPath(f.FS)
 	if err != nil {
-		return "", err
+		return nil, err
+	}
+	stat, err := fs.Stat(f.FS, real.Path())
+	if err != nil {
+		return nil, err
 	}
 	if stat.IsDir() {
-		return "", errors.New("library path is a directory: " + file.Abs())
+		return nil, errors.New("library path is a directory: " + file.Abs())
 	}
-	resolved, err := filepath.EvalSymlinks(file.Abs())
-	if err != nil {
-		return "", err
-	}
-	return resolved, nil
+	return real, nil
 }

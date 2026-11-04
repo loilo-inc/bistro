@@ -1,3 +1,6 @@
 coverage:
   status:
     project: off
+ignore:
+  - "pkg/internal/elftest"
+  - "pkg/internal/testfs"

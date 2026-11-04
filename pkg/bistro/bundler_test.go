@@ -31,7 +31,7 @@ func TestBundlerMergesInputs(t *testing.T) {
 		requested = append(requested, name)
 		return get(name)
 	}
-	b := NewBundler(DI{Query: d})
+	b := NewBundler(DI{FS: testFS(d), Query: d})
 	var scanned []string
 	b.scanner = stubScanner(func(path string) ([]*ElfDependency, error) {
 		scanned = append(scanned, path)
@@ -56,7 +56,7 @@ func TestBundlerPackageOnly(t *testing.T) {
 	pkg := testPackage(t, "fonts", "", "", dpkg.StatusInstalled)
 	d := packageFilesStub(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {file}})
 	out := filepath.Join(dir, "bundle.tar")
-	require.NoError(t, NewBundler(DI{Query: d}).Bundle(BundleInput{Out: out, Packages: []string{"fonts"}}))
+	require.NoError(t, NewBundler(DI{FS: testFS(d), Query: d}).Bundle(BundleInput{Out: out, Packages: []string{"fonts"}}))
 	assert.Equal(t, "font data", readBundleTar(t, out)[rootFSArchiveName(file)].body)
 }
 
@@ -71,9 +71,9 @@ func TestBundlerWithUnselectedMultiarchPackages(t *testing.T) {
 	file := filepath.Join(dir, "font.ttf")
 	writeRootFSFile(t, file, "font data", 0644)
 	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "info/fonts.list"), []byte(file+"\n"), 0644))
-	q := dpkg.NewQueryWithBaseDir(baseDir)
+	q := testQuery(baseDir)
 	require.NoError(t, q.Load())
-	b := NewBundler(DI{Query: q})
+	b := NewBundler(DI{FS: testFS(q), Query: q})
 	out := filepath.Join(dir, "bundle.tar")
 	require.NoError(t, b.Bundle(BundleInput{Out: out, Packages: []string{"fonts"}}))
 	entries := readBundleTar(t, out)
@@ -116,7 +116,7 @@ func TestBundlerCollectsTargetPackage(t *testing.T) {
 					return nil, nil
 				})
 				out := filepath.Join(dir, "bundle.tar")
-				require.NoError(t, NewBundler(DI{Query: d, Ldd: l}).Bundle(BundleInput{Out: out, Files: rootfs.MustPaths(target)}))
+				require.NoError(t, NewBundler(DI{FS: testFS(d), Query: d, Ldd: l}).Bundle(BundleInput{Out: out, Files: rootfs.MustPaths(target)}))
 				entries := readBundleTar(t, out)
 				assert.Contains(t, entries, rootFSArchiveName(program))
 				assert.Equal(t, "application data", entries[rootFSArchiveName(data)].body)
@@ -140,7 +140,7 @@ func TestBundlerScanOnly(t *testing.T) {
 	file := filepath.Join(dir, "static")
 	writeTestELF(t, file, elf.ET_EXEC, false)
 	out := filepath.Join(dir, "bundle.tar")
-	require.NoError(t, NewBundler(DI{Query: unownedFilesQuery()}).Bundle(BundleInput{Out: out, Scans: rootfs.MustPaths(file)}))
+	require.NoError(t, NewBundler(DI{FS: testFS(nil), Query: unownedFilesQuery()}).Bundle(BundleInput{Out: out, Scans: rootfs.MustPaths(file)}))
 	assert.Empty(t, readBundleTar(t, out), "a scan contributes dependencies, not its target")
 }
 
@@ -169,7 +169,7 @@ func TestBundlerScansELFAndCollectsOwningPackages(t *testing.T) {
 		return []*ldd.Library{{Name: "libfoo.so", Path: rootfs.MustPath(library)}}, nil
 	})
 	out := filepath.Join(dir, "bundle.tar")
-	require.NoError(t, NewBundler(DI{Query: d, Ldd: l}).Bundle(BundleInput{
+	require.NoError(t, NewBundler(DI{FS: testFS(d), Query: d, Ldd: l}).Bundle(BundleInput{
 		Out: out, Files: rootfs.MustPaths(program), Scans: rootfs.MustPaths(extension, program),
 	}))
 	entries := readBundleTar(t, out)
@@ -190,7 +190,7 @@ func TestBundlerFailures(t *testing.T) {
 			writeRootFSFile(t, out, "original", 0644)
 			failure := errors.New("external command failed")
 			d := packageFilesStub(t, nil, nil)
-			b := NewBundler(DI{Query: d})
+			b := NewBundler(DI{FS: testFS(d), Query: d})
 			input := BundleInput{Out: out}
 			b.scanner = stubScanner(func(path string) ([]*ElfDependency, error) {
 				switch stage {
@@ -253,7 +253,7 @@ func TestBundlerFailures(t *testing.T) {
 func TestBundlerReuseRefreshesScanner(t *testing.T) {
 	dir := rootFSTempDir(t)
 	file := filepath.Join(dir, "program")
-	b := NewBundler(DI{Query: unownedFilesQuery()})
+	b := NewBundler(DI{FS: testFS(nil), Query: unownedFilesQuery()})
 	for i, typ := range []elf.Type{elf.ET_REL, elf.ET_EXEC} {
 		writeTestELF(t, file, typ, false)
 		out := filepath.Join(dir, "bundle.tar")
@@ -294,7 +294,7 @@ func TestBundlerCopyDirectory(t *testing.T) {
 				source = "tree"
 			}
 			out := filepath.Join(dir, "bundle.tar")
-			require.NoError(t, NewBundler(DI{}).Bundle(BundleInput{Out: out, Copies: []rootfs.Path{rootfs.MustPath(dir).Resolve(source)}}))
+			require.NoError(t, NewBundler(DI{FS: testFS(nil)}).Bundle(BundleInput{Out: out, Copies: []rootfs.Path{rootfs.MustPath(dir).Resolve(source)}}))
 			entries := readBundleTar(t, out)
 			for _, path := range []string{tree, filepath.Dir(file), empty} {
 				require.Contains(t, entries, rootFSArchiveName(path))
@@ -326,7 +326,7 @@ func TestBundlerCopySymlinks(t *testing.T) {
 		require.NoError(t, os.Symlink(target, filepath.Join(tree, name)))
 	}
 	out := filepath.Join(dir, "bundle.tar")
-	require.NoError(t, NewBundler(DI{}).Bundle(BundleInput{Out: out, Copies: rootfs.MustPaths(tree)}))
+	require.NoError(t, NewBundler(DI{FS: testFS(nil)}).Bundle(BundleInput{Out: out, Copies: rootfs.MustPaths(tree)}))
 	entries := readBundleTar(t, out)
 	for name, target := range links {
 		key := rootFSArchiveName(filepath.Join(tree, name))
@@ -352,7 +352,7 @@ func TestBundlerCopyMergesAndDeduplicates(t *testing.T) {
 	d := packageFilesStub(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {file}})
 	out := filepath.Join(dir, "bundle.tar")
 	// A nil Ldd makes an unexpected dependency scan of a copied ELF fail.
-	require.NoError(t, NewBundler(DI{Query: d}).Bundle(BundleInput{
+	require.NoError(t, NewBundler(DI{FS: testFS(d), Query: d}).Bundle(BundleInput{
 		Out: out, Files: rootfs.MustPaths(file), Scans: rootfs.MustPaths(file), Packages: []string{pkg.NameWithArch()},
 		Copies: rootfs.MustPath(dir).SplitList("tree:tree/program:tree:" + copiedELF),
 	}))
@@ -381,7 +381,7 @@ func TestBundlerCopyFailureAndReuse(t *testing.T) {
 				require.NoError(t, os.Symlink("missing", bad))
 				bad = filepath.Dir(bad)
 			}
-			b := NewBundler(DI{})
+			b := NewBundler(DI{FS: testFS(nil)})
 			err := b.Bundle(BundleInput{Out: out, Copies: rootfs.MustPaths(good, bad)})
 			require.ErrorIs(t, err, os.ErrNotExist)
 			original, err := os.ReadFile(out)

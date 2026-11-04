@@ -11,7 +11,7 @@ import (
 )
 
 func TestQueryBeforeLoad(t *testing.T) {
-	q := NewQuery()
+	q := NewQuery(packageFS(t.TempDir()))
 	_, err := q.Get("example")
 	require.ErrorContains(t, err, "packages not loaded")
 	_, err = q.List()
@@ -25,7 +25,7 @@ func TestQueryLoad(t *testing.T) {
 	writeFixture(t, baseDir, "status", "Package: example\nArchitecture: arm64\nMulti-Arch: same\nStatus: install ok installed\nVersion: 1.0\n\nPackage: other\nArchitecture: all\nStatus: install ok installed\nVersion: 2.0\n")
 	writeFixture(t, baseDir, "info/example:arm64.list", "/usr/bin/example\n/usr/share/common\n")
 	writeFixture(t, baseDir, "info/other.list", "/usr/bin/other\n/usr/share/common\n")
-	q := &query{baseDir: baseDir}
+	q := &query{fs: packageFS(baseDir)}
 	require.NoError(t, q.Load())
 	pkg, err := q.Get("example")
 	require.NoError(t, err)
@@ -78,16 +78,18 @@ func TestQueryLoad(t *testing.T) {
 }
 
 func TestQueryLoadErrors(t *testing.T) {
-	q := &query{baseDir: t.TempDir()}
+	baseDir := t.TempDir()
+	q := &query{fs: packageFS(baseDir)}
 	err := q.Load()
 	require.ErrorIs(t, err, os.ErrNotExist)
-	writeFixture(t, q.baseDir, "status", "Package: example\ninvalid line\n")
+	writeFixture(t, baseDir, "status", "Package: example\ninvalid line\n")
 	require.ErrorContains(t, q.Load(), "invalid line in status file")
 }
 
 func TestQueryEmptyStatus(t *testing.T) {
-	q := &query{baseDir: t.TempDir()}
-	writeFixture(t, q.baseDir, "status", "")
+	baseDir := t.TempDir()
+	q := &query{fs: packageFS(baseDir)}
+	writeFixture(t, baseDir, "status", "")
 	require.NoError(t, q.Load())
 	list, err := q.List()
 	require.NoError(t, err)
@@ -100,10 +102,11 @@ func TestQueryEmptyStatus(t *testing.T) {
 }
 
 func TestQueryLookUpReadError(t *testing.T) {
-	q := &query{baseDir: t.TempDir()}
-	writeFixture(t, q.baseDir, "status", "Package: example\nArchitecture: all\nStatus: install ok installed\n")
+	baseDir := t.TempDir()
+	q := &query{fs: packageFS(baseDir)}
+	writeFixture(t, baseDir, "status", "Package: example\nArchitecture: all\nStatus: install ok installed\n")
 	// A directory at the file path causes a read error other than not-exist.
-	listPath := filepath.Join(q.baseDir, "info/example.list")
+	listPath := filepath.Join(baseDir, "info/example.list")
 	require.NoError(t, os.MkdirAll(listPath, 0755))
 	require.NoError(t, q.Load())
 	_, err := q.LookUp("/usr/bin/example")
@@ -113,7 +116,7 @@ func TestQueryLookUpReadError(t *testing.T) {
 	_, err = q.LookUp("/usr/bin/example")
 	require.ErrorAs(t, err, &pathErr, "an incomplete index must not hide read errors")
 	require.NoError(t, os.Remove(listPath))
-	writeFixture(t, q.baseDir, "info/example.list", "/usr/bin/example\n")
+	writeFixture(t, baseDir, "info/example.list", "/usr/bin/example\n")
 	found, err := q.LookUp("/usr/bin/example")
 	require.NoError(t, err)
 	require.NotNil(t, found, "retry building the index after the read error is resolved")
@@ -121,7 +124,7 @@ func TestQueryLookUpReadError(t *testing.T) {
 }
 
 func TestQueryLookUpRejectsRelativePaths(t *testing.T) {
-	q := NewQueryWithBaseDir(t.TempDir())
+	q := newTestQuery(t.TempDir())
 	for _, path := range []string{"", "usr/bin/example", "./example"} {
 		t.Run(path, func(t *testing.T) {
 			_, err := q.LookUp(path)
@@ -135,7 +138,7 @@ func TestQueryLookUpLiteralMetacharacters(t *testing.T) {
 	writeFixture(t, baseDir, "status", "Package: example\nArchitecture: all\n")
 	const path = "/usr/share/example/[data]*?"
 	writeFixture(t, baseDir, "info/example.list", path+"\n")
-	q := NewQueryWithBaseDir(baseDir)
+	q := newTestQuery(baseDir)
 	require.NoError(t, q.Load())
 	want, err := q.Get("example")
 	require.NoError(t, err)
@@ -163,7 +166,7 @@ func TestQueryAliases(t *testing.T) {
 				infoName += ":" + tc.arch
 			}
 			writeFixture(t, baseDir, "info/"+infoName+".list", "/usr/bin/example\n")
-			q := &query{baseDir: baseDir, arch: tc.arch}
+			q := &query{fs: packageFS(baseDir), arch: tc.arch}
 			require.NoError(t, q.Load())
 			pkg, err := q.Get("example")
 			require.NoError(t, err)
@@ -192,7 +195,7 @@ func TestQueryMultiarch(t *testing.T) {
 					writeFixture(t, baseDir, "info/example:"+arch+".list", "/usr/lib/"+arch+"/libexample.so\n/usr/share/example/copyright\n")
 				}
 				writeFixture(t, baseDir, "status", status)
-				q := &query{baseDir: baseDir, arch: native}
+				q := &query{fs: packageFS(baseDir), arch: native}
 				require.NoError(t, q.Load())
 				selected, err := q.Get("example")
 				require.NoError(t, err)
@@ -231,7 +234,7 @@ func TestQueryMultiarchFallback(t *testing.T) {
 				foreign = "amd64"
 			}
 			writeFixture(t, baseDir, "status", fmt.Sprintf("Package: example\nArchitecture: %s\nMulti-Arch: same\n\nPackage: example\nArchitecture: i386\nMulti-Arch: same\n", foreign))
-			q := &query{baseDir: baseDir, arch: native}
+			q := &query{fs: packageFS(baseDir), arch: native}
 			require.NoError(t, q.Load())
 			selected, err := q.Get("example")
 			require.NoError(t, err)
@@ -247,7 +250,7 @@ func TestQueryLookUpSkipsMissingLists(t *testing.T) {
 	writeFixture(t, baseDir, "status", "Package: held\nStatus: hold ok not-installed\n\nPackage: missing\nArchitecture: all\nStatus: install ok installed\n\nPackage: example\nArchitecture: all\nStatus: install ok installed\n")
 	// Both uninstalled and installed packages may have no .list file.
 	writeFixture(t, baseDir, "info/example.list", "/usr/bin/example\n")
-	q := NewQueryWithBaseDir(baseDir)
+	q := newTestQuery(baseDir)
 	require.NoError(t, q.Load())
 	found, err := q.LookUp("/usr/bin/example")
 	require.NoError(t, err)
@@ -261,7 +264,7 @@ func TestQueryLookUpFindsUnconfiguredPackages(t *testing.T) {
 			baseDir := t.TempDir()
 			writeFixture(t, baseDir, "status", fmt.Sprintf("Package: example\nArchitecture: all\nStatus: install ok %s\n", status))
 			writeFixture(t, baseDir, "info/example.list", "/usr/bin/example\n")
-			q := NewQueryWithBaseDir(baseDir)
+			q := newTestQuery(baseDir)
 			require.NoError(t, q.Load())
 			found, err := q.LookUp("/usr/bin/example")
 			require.NoError(t, err)

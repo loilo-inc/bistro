@@ -1,15 +1,21 @@
 package bistro
 
 import (
+	"archive/tar"
+	"bytes"
 	"debug/elf"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/internal/elftest"
+	"github.com/loilo-inc/bistro/pkg/internal/testfs"
 	"github.com/loilo-inc/bistro/pkg/ldd"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/require"
@@ -121,7 +127,7 @@ func packageFilesStub(t *testing.T, packages []*dpkg.Package, files map[string][
 		require.NoError(t, os.WriteFile(filepath.Join(baseDir, "info", name+".md5sums"), []byte("d41d8cd98f00b204e9800998ecf8427e  usr/share/"+name+"\n"), 0644))
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "status"), []byte(status.String()), 0644))
-	q := dpkg.NewQueryWithBaseDir(baseDir)
+	q := dpkg.NewQuery(testfs.Mount(os.DirFS("/"), "var/lib/dpkg", os.DirFS(baseDir)))
 	require.NoError(t, q.Load())
 	for _, pkg := range packages {
 		loaded, err := q.Get(pkg.Name())
@@ -136,4 +142,62 @@ func packageFilesStub(t *testing.T, packages []*dpkg.Package, files map[string][
 		}
 		return nil, fmt.Errorf("package not found: %s", name)
 	}}
+}
+
+type rootFSEntry struct {
+	header tar.Header
+	body   string
+}
+
+func rootFSTempDir(t *testing.T) string {
+	t.Helper()
+	// macOS may place TempDir beneath a symlink such as /var.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	return dir
+}
+
+func writeRootFSFile(t *testing.T, name, content string, mode os.FileMode) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(name), 0755))
+	require.NoError(t, os.WriteFile(name, []byte(content), mode))
+	require.NoError(t, os.Chmod(name, mode))
+}
+
+func readRootFSTar(t *testing.T, data []byte) map[string]rootFSEntry {
+	t.Helper()
+	entries := make(map[string]rootFSEntry)
+	reader := tar.NewReader(bytes.NewReader(data))
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		require.False(t, path.IsAbs(header.Name), "absolute archive path: %q", header.Name)
+		require.NotEqual(t, "..", header.Name)
+		require.False(t, strings.HasPrefix(header.Name, "../"), "invalid archive path: %q", header.Name)
+		require.NotContains(t, entries, header.Name, "duplicate archive entry")
+		body, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		entries[header.Name] = rootFSEntry{header: *header, body: string(body)}
+	}
+	return entries
+}
+
+func rootFSArchiveName(name string) string {
+	return strings.TrimPrefix(filepath.ToSlash(name), "/")
+}
+
+func testFS(q dpkg.Query) fs.FS {
+	if stub, ok := q.(stubQuery); ok && stub.baseDir != "" {
+		return testfs.Mount(os.DirFS("/"), "var/lib/dpkg", os.DirFS(stub.baseDir))
+	}
+	return os.DirFS("/")
+}
+
+func testQuery(baseDir string) stubQuery {
+	q := stubQuery{baseDir: baseDir}
+	q.Query = dpkg.NewQuery(testFS(q))
+	return q
 }

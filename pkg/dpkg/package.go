@@ -1,9 +1,9 @@
 package dpkg
 
 import (
+	"errors"
 	"fmt"
-	"os"
-	"path"
+	"io/fs"
 	"strings"
 
 	"github.com/loilo-inc/bistro/pkg/rootfs"
@@ -11,7 +11,6 @@ import (
 
 // https://man7.org/linux/man-pages/man1/dpkg-query.1.html
 type Package struct {
-	baseDir   string
 	fields    []*Field
 	fieldsMap map[string]*Field
 	list      *ListData
@@ -92,19 +91,15 @@ func (p *Package) Architecture() string {
 }
 
 func (p *Package) infoPath(extension string) string {
-	baseDir := p.baseDir
-	if baseDir == "" {
-		baseDir = DefaultBaseDir
-	}
-	return path.Join(baseDir, "info", p.NameWithArch()+extension)
+	return dpkgInfoDir.Join(p.NameWithArch() + extension).Path()
 }
 
-func (p *Package) ListFiles() ([]rootfs.Path, error) {
+func (p *Package) ListFiles(fss fs.FS) ([]rootfs.Path, error) {
 	if p.list == nil {
 		listFile := p.infoPath(".list")
-		content, err := os.ReadFile(listFile)
+		content, err := fs.ReadFile(fss, listFile)
 		// ignore non-exist error for various reasons (e.g., file removed)
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			p.list = &ListData{Files: []rootfs.Path{}}
 			return p.list.Files, nil
 		}
@@ -128,12 +123,12 @@ func (p *Package) ListFiles() ([]rootfs.Path, error) {
 	return p.list.Files, nil
 }
 
-func (p *Package) Md5Sums() (*Md5Sums, error) {
+func (p *Package) Md5Sums(fss fs.FS) (*Md5Sums, error) {
 	if p.md5Sums == nil {
 		md5File := p.infoPath(".md5sums")
-		content, err := os.ReadFile(md5File)
+		content, err := fs.ReadFile(fss, md5File)
 		// .md5sums file might not exist
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			p.md5Sums = &Md5Sums{Entries: []Checksum{}}
 			return p.md5Sums, nil
 		} else if err != nil {

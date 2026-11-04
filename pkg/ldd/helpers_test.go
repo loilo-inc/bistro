@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/loilo-inc/bistro/pkg/internal/testfs"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/require"
 )
@@ -41,8 +42,10 @@ func testResolver(t *testing.T, options ResolverOptions, records ...cacheRecord)
 	require.NoError(t, os.WriteFile(path, cacheFixture(records...), 0644))
 	cwd, err := os.Getwd()
 	require.NoError(t, err)
-	r := NewResolver(cwd, options).(*resolver)
-	require.NoError(t, r.ldSoCache.load(path))
+	options.Cwd = cwd
+	options.FS = testfs.Mount(os.DirFS("/"), "etc", os.DirFS(filepath.Dir(path)))
+	r := NewResolver(options).(*resolver)
+	require.NoError(t, r.Load())
 	return r
 }
 

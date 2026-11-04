@@ -83,10 +83,10 @@ func TestResolverErrorsAndNoDependencies(t *testing.T) {
 }
 
 func TestNewResolverSystemPaths(t *testing.T) {
-	r := NewResolver("/", ResolverOptions{DstLib: "lib/x86_64-linux-gnu"}).(*resolver)
+	r := NewResolver(ResolverOptions{Cwd: "/", FS: os.DirFS("/"), DstLib: "lib/x86_64-linux-gnu"}).(*resolver)
 	require.Equal(t, rootfs.MustPaths("/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu",
 		"/lib", "/usr/lib", "/lib64", "/usr/lib64"), r.sysLibraryPaths)
-	r = NewResolver("/", ResolverOptions{}).(*resolver)
+	r = NewResolver(ResolverOptions{Cwd: "/", FS: os.DirFS("/")}).(*resolver)
 	want := rootfs.MustPaths("/lib", "/usr/lib", "/lib64", "/usr/lib64")
 	if lib := getDstLib(runtime.GOARCH); lib != "" {
 		want = append(rootfs.MustPaths("/"+lib, "/usr/"+lib), want...)
@@ -98,7 +98,7 @@ func TestNewResolverOptions(t *testing.T) {
 	t.Setenv("LD_LIBRARY_PATH", "/opt/lib")
 	cwd, err := os.Getwd()
 	require.NoError(t, err)
-	r := NewResolver(cwd, ResolverOptions{LdLibraryPath: os.Getenv("LD_LIBRARY_PATH")}).(*resolver)
+	r := NewResolver(ResolverOptions{Cwd: cwd, FS: os.DirFS("/"), LdLibraryPath: os.Getenv("LD_LIBRARY_PATH")}).(*resolver)
 	require.Equal(t, "/opt/lib", r.ldLibraryPath)
 	require.Equal(t, getDstLib(runtime.GOARCH), r.dstLib)
 	require.Equal(t, getDstPlatform(runtime.GOARCH), r.dstPlatform)

@@ -3,9 +3,11 @@ package dpkg
 import (
 	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"path"
 	"runtime"
+
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 )
 
 type Query interface {
@@ -16,12 +18,12 @@ type Query interface {
 }
 
 type query struct {
-	baseDir string
 	// must be arm64/amd64
 	arch     string
 	packages []*Package
 	nameMap  map[string][]*Package
 	filesMap map[string]*Package
+	fs       fs.FS
 }
 
 var _ Query = &query{}
@@ -31,7 +33,9 @@ type OwnedFile struct {
 	File    string
 }
 
-const DefaultBaseDir = "/var/lib/dpkg"
+var dpkgDir = rootfs.MustPath("/var/lib/dpkg")
+var dpkgStatusFile = dpkgDir.Join("status")
+var dpkgInfoDir = dpkgDir.Join("info")
 
 // https://manpages.debian.org/testing/dpkg/dpkg.1.en.html#Package_states
 const (
@@ -58,13 +62,8 @@ const (
 	SelectionUnknown   = "unknown"
 )
 
-func NewQuery() Query {
-	return NewQueryWithBaseDir(DefaultBaseDir)
-}
-
-// NewQueryWithBaseDir reads the dpkg database from baseDir.
-func NewQueryWithBaseDir(baseDir string) Query {
-	return &query{baseDir: baseDir, arch: runtime.GOARCH}
+func NewQuery(fs fs.FS) Query {
+	return &query{fs: fs, arch: runtime.GOARCH}
 }
 
 func (d *query) Get(name string) (*Package, error) {
@@ -106,7 +105,7 @@ func (q *query) LookUp(searchFile string) (*Package, error) {
 	}
 	var filesMap = make(map[string]*Package)
 	for _, pkg := range packages {
-		files, err := pkg.ListFiles()
+		files, err := pkg.ListFiles(q.fs)
 		if err != nil {
 			return nil, err
 		}
@@ -119,7 +118,7 @@ func (q *query) LookUp(searchFile string) (*Package, error) {
 }
 
 func (d *query) Load() error {
-	content, err := os.ReadFile(path.Join(d.baseDir, "status"))
+	content, err := fs.ReadFile(d.fs, dpkgStatusFile.Path())
 	if err != nil {
 		return err
 	}
@@ -131,7 +130,6 @@ func (d *query) Load() error {
 	d.packages = pkgs
 	d.nameMap = make(map[string][]*Package)
 	for _, pkg := range pkgs {
-		pkg.baseDir = d.baseDir
 		name := pkg.Name()
 		arch := pkg.Architecture()
 		// forcely add arch to identify the package
