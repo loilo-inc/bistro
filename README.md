@@ -34,10 +34,20 @@ The scan result shows that:
 `bundle` bundles one or more ELF executables and their dependencies into a single rootfs tarball.
 
 ```bash
-bistro bundle -o ./python3.rootfs.tar /usr/bin/python3
+bistro bundle -o ./python3.tar /usr/bin/python3
 ```
 
-#### Limitations
+### `bistro unpack`
+
+`unpack` extracts one or more uncompressed `.tar` archives into a destination directory, creating the directory if needed.
+
+Use `-d` (or `--dest`) to specify the destination. The default is the current directory.
+
+```bash
+bistro unpack ./python3.tar -d ./python3
+```
+
+## Limitations
 
 `bistro bundle` cannot automatically collect every dependency. Many files are implicitly required by the application.
 
