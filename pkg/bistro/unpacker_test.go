@@ -140,57 +140,128 @@ func TestUnpackerPreservesNonemptyDirectory(t *testing.T) {
 }
 
 func TestUnpackerDirectoryModes(t *testing.T) {
-	dest := filepath.Join(t.TempDir(), "rootfs")
-	// Restore access before TempDir cleanup, including after a failed assertion.
-	t.Cleanup(func() {
-		_ = os.Chmod(dest, 0700)
-		_ = os.Chmod(filepath.Join(dest, "readonly"), 0700)
-		_ = os.Chmod(filepath.Join(dest, "readonly", "nested"), 0700)
-	})
+	for _, mode := range []int64{0750, 0555, 0000} {
+		t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {
+			dest := filepath.Join(t.TempDir(), "rootfs")
+			target := filepath.Join(dest, "entry")
+			t.Cleanup(func() { _ = os.Chmod(target, 0700) })
+			require.NoError(t, NewUnpacker(dest).Unpack(writeUnpackTar(t, unpackDir("entry/", mode))))
+			info, err := os.Stat(target)
+			require.NoError(t, err)
+			assert.Equal(t, os.FileMode(mode), info.Mode().Perm())
+		})
+	}
+}
+
+func TestUnpackerPreservesExistingDirectoryModes(t *testing.T) {
+	dest := t.TempDir()
+	existing := filepath.Join(dest, "existing")
+	require.NoError(t, os.Mkdir(existing, 0700))
+	require.NoError(t, os.Chmod(existing, 0700))
 	archive := writeUnpackTar(t,
 		unpackDir(".", 0000),
-		unpackDir("readonly", 0555),
-		unpackDir("readonly/nested", 0000),
-		unpackFile("readonly/nested/empty", "", 0400),
-		unpackFile("./implicit/child", "data", 0640),
-		unpackDir("implicit/", 0755),
-		unpackDir("implicit", 0700),
+		unpackDir("existing", 0777),
+		unpackFile("existing/child", "retained permissions", 0640),
+		unpackFile("./implicit/child", "implicit parent", 0644),
+		unpackDir("implicit/", 0000),
 	)
+	rootInfo, err := os.Stat(dest)
+	require.NoError(t, err)
 	require.NoError(t, NewUnpacker(dest).Unpack(archive))
 	for _, entry := range []struct {
 		name string
 		mode os.FileMode
 	}{
-		{".", 0000}, {"readonly", 0555}, {"readonly/nested", 0000}, {"implicit", 0700},
+		{".", rootInfo.Mode().Perm()}, {"existing", 0700}, {"implicit", 0755},
 	} {
-		name := filepath.Join(dest, entry.name)
-		info, err := os.Stat(name)
+		info, err := os.Stat(filepath.Join(dest, entry.name))
 		require.NoError(t, err)
 		assert.Equal(t, entry.mode, info.Mode().Perm(), entry.name)
-		// Unlock each ancestor only after checking its final mode.
-		require.NoError(t, os.Chmod(name, 0700))
 	}
-	requireUnpackedFile(t, filepath.Join(dest, "readonly", "nested", "empty"), "", 0400)
-	requireUnpackedFile(t, filepath.Join(dest, "implicit", "child"), "data", 0640)
+	requireUnpackedFile(t, filepath.Join(existing, "child"), "retained permissions", 0640)
+	requireUnpackedFile(t, filepath.Join(dest, "implicit", "child"), "implicit parent", 0644)
+}
+
+func TestUnpackerDoesNotRelaxDirectoryPermissions(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("requires an unprivileged user")
+	}
+	for _, existing := range []bool{false, true} {
+		for _, mode := range []os.FileMode{0555, 0000} {
+			t.Run(fmt.Sprintf("existing=%t/mode=%04o", existing, mode), func(t *testing.T) {
+				dest := t.TempDir()
+				target := filepath.Join(dest, "restricted")
+				t.Cleanup(func() { _ = os.Chmod(target, 0700) })
+				requested := int64(mode)
+				if existing {
+					require.NoError(t, os.Mkdir(target, 0700))
+					require.NoError(t, os.Chmod(target, mode))
+					// An archive's writable mode must not relax an existing directory.
+					requested = 0777
+				}
+				archive := writeUnpackTar(t, unpackDir("restricted", requested), unpackFile("restricted/child", "data", 0644))
+				require.ErrorIs(t, NewUnpacker(dest).Unpack(archive), os.ErrPermission)
+				info, err := os.Stat(target)
+				require.NoError(t, err)
+				assert.Equal(t, mode, info.Mode().Perm())
+				require.NoError(t, os.Chmod(target, 0700))
+				_, err = os.Lstat(filepath.Join(target, "child"))
+				require.ErrorIs(t, err, os.ErrNotExist)
+			})
+		}
+	}
+}
+
+func TestUnpackerInternalSymlinkDirectoryReplacement(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "rootfs")
+	archive := writeUnpackTar(t, unpackDir("entry", 0555), unpackLink("alias", "."), unpackFile("alias/entry", "replacement", 0640))
+	require.NoError(t, NewUnpacker(dest).Unpack(archive))
+	requireUnpackedFile(t, filepath.Join(dest, "entry"), "replacement", 0640)
+}
+
+func TestUnpackerInternalSymlinkPermissionFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("requires an unprivileged user")
+	}
+	dest := filepath.Join(t.TempDir(), "rootfs")
+	parent := filepath.Join(dest, "a", "b", "c")
+	t.Cleanup(func() { _ = os.Chmod(parent, 0700) })
+	archive := writeUnpackTar(t, unpackDir("a/b/c", 0000), unpackLink("alias", "a/b/c"), unpackDir("alias/leaf", 0000))
+	require.ErrorIs(t, NewUnpacker(dest).Unpack(archive), os.ErrPermission)
+	info, err := os.Stat(parent)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0000), info.Mode().Perm())
+	require.NoError(t, os.Chmod(parent, 0700))
+	_, err = os.Lstat(filepath.Join(parent, "leaf"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestUnpackerExtractsThroughInternalSymlink(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "rootfs")
+	archive := writeUnpackTar(t, unpackDir("usr/lib", 0755), unpackLink("lib", "usr/lib"), unpackFile("lib/example.so", "library", 0644))
+	require.NoError(t, NewUnpacker(dest).Unpack(archive))
+	requireUnpackedFile(t, filepath.Join(dest, "usr", "lib", "example.so"), "library", 0644)
+	link, err := os.Readlink(filepath.Join(dest, "lib"))
+	require.NoError(t, err)
+	assert.Equal(t, "usr/lib", link)
 }
 
 func TestUnpackerMultipleArchives(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "rootfs")
 	u := NewUnpacker(dest)
-	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dest, "readonly"), 0700) })
-	first := writeUnpackTar(t, unpackDir("readonly", 0555), unpackFile("readonly/file", "long original content", 0755), unpackLink("link", "readonly/file"), unpackDir("retired", 0700))
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dest, "shared"), 0700) })
+	first := writeUnpackTar(t, unpackDir("shared", 0700), unpackFile("shared/file", "long original content", 0755), unpackLink("link", "shared/file"))
 	require.NoError(t, u.Unpack(first))
-	require.NoError(t, os.Remove(filepath.Join(dest, "retired")))
-	second := writeUnpackTar(t, unpackDir("readonly", 0555), unpackFile("readonly/file", "new", 0644), unpackFile("readonly/extra", "extra", 0600), unpackLink("link", "readonly/file"))
+	second := writeUnpackTar(t, unpackDir("shared", 0700), unpackFile("shared/file", "new", 0644), unpackFile("shared/extra", "extra", 0600), unpackLink("link", "shared/file"))
 	require.NoError(t, u.Unpack(second))
-	requireUnpackedFile(t, filepath.Join(dest, "readonly", "file"), "new", 0644)
-	requireUnpackedFile(t, filepath.Join(dest, "readonly", "extra"), "extra", 0600)
-	info, err := os.Stat(filepath.Join(dest, "readonly"))
+	requireUnpackedFile(t, filepath.Join(dest, "shared", "file"), "new", 0644)
+	requireUnpackedFile(t, filepath.Join(dest, "shared", "extra"), "extra", 0600)
+	info, err := os.Stat(filepath.Join(dest, "shared"))
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0555), info.Mode().Perm())
+	assert.Equal(t, os.FileMode(0700), info.Mode().Perm())
 	link, err := os.Readlink(filepath.Join(dest, "link"))
 	require.NoError(t, err)
-	assert.Equal(t, "readonly/file", link)
+	assert.Equal(t, "shared/file", link)
 }
 
 func TestUnpackerRejectsEscapingPaths(t *testing.T) {
@@ -246,7 +317,7 @@ func TestUnpackerReplacesSymlinkWithoutFollowingIt(t *testing.T) {
 	requireUnpackedFile(t, outside, "original", 0644)
 }
 
-func TestUnpackerUnsupportedEntryPreservesFileAndRestoresDirectoryMode(t *testing.T) {
+func TestUnpackerUnsupportedEntryPreservesFileAndDirectoryMode(t *testing.T) {
 	for _, kind := range []byte{tar.TypeLink, tar.TypeFifo} {
 		t.Run(fmt.Sprint(kind), func(t *testing.T) {
 			dest := filepath.Join(t.TempDir(), "rootfs")
@@ -258,17 +329,17 @@ func TestUnpackerUnsupportedEntryPreservesFileAndRestoresDirectoryMode(t *testin
 			require.NoError(t, err)
 			assert.Equal(t, os.FileMode(0555), info.Mode().Perm())
 			require.NoError(t, os.Remove(filepath.Join(dest, "readonly")))
-			// State from the failed archive must not affect the next extraction.
+			// A failed archive must not prevent the next extraction.
 			require.NoError(t, u.Unpack(writeUnpackTar(t, unpackFile("next", "ok", 0644))))
 		})
 	}
 }
 
-func TestUnpackerTruncatedFileRestoresDirectoryMode(t *testing.T) {
+func TestUnpackerTruncatedFilePreservesDirectoryMode(t *testing.T) {
 	var buf bytes.Buffer
 	w := tar.NewWriter(&buf)
 	require.NoError(t, w.WriteHeader(&tar.Header{Name: "readonly", Typeflag: tar.TypeDir, Mode: 0555}))
-	require.NoError(t, w.WriteHeader(&tar.Header{Name: "readonly/file", Typeflag: tar.TypeReg, Mode: 0644, Size: 10}))
+	require.NoError(t, w.WriteHeader(&tar.Header{Name: "partial", Typeflag: tar.TypeReg, Mode: 0644, Size: 10}))
 	_, err := w.Write([]byte("short"))
 	require.NoError(t, err)
 	// Leave the declared file body incomplete rather than finalizing the tar.
@@ -277,6 +348,7 @@ func TestUnpackerTruncatedFileRestoresDirectoryMode(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "rootfs")
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dest, "readonly"), 0700) })
 	require.ErrorIs(t, NewUnpacker(dest).Unpack(archive), io.ErrUnexpectedEOF)
+	requireUnpackedFile(t, filepath.Join(dest, "partial"), "short", 0600)
 	info, err := os.Stat(filepath.Join(dest, "readonly"))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0555), info.Mode().Perm())
