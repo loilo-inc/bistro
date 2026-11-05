@@ -25,15 +25,15 @@ func NewBaker(di DI) Baker {
 
 type BakeInput struct {
 	Out      string
-	Packages []*dpkg.Package
+	DpkgList []*dpkg.Package
 	Files    []rootfs.Path
 }
 
 func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 	// Distroless metadata filenames use the unqualified package name.
 	// Reject collisions before creating an archive that would lose metadata.
-	names := make(map[string]string, len(input.Packages))
-	for _, pkg := range input.Packages {
+	names := make(map[string]string, len(input.DpkgList))
+	for _, pkg := range input.DpkgList {
 		if previous, ok := names[pkg.Name()]; ok {
 			return fmt.Errorf("package metadata name conflict: %s and %s use %s", previous, pkg.NameWithArch(), pkg.Name())
 		}
@@ -50,7 +50,7 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 		}
 	}()
 	rootfs := rootfs.NewArchiver(b.FS, tmpFile)
-	for _, pkg := range input.Packages {
+	for _, pkg := range input.DpkgList {
 		if err := b.writePackageMetadata(rootfs, pkg); err != nil {
 			return err
 		}
