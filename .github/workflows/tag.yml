@@ -4,6 +4,9 @@ on:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+-rc[0-9]+"
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
 permissions:
   contents: write
   packages: write
@@ -38,7 +41,7 @@ jobs:
           - arch: amd64
             runner: ubuntu-26.04
           - arch: arm64
-            runner: ubuntu-26.04-arm64
+            runner: ubuntu-26.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Log in to GitHub Container Registry
@@ -71,9 +74,12 @@ jobs:
         run: |
           REF_NO_HEAD_V=${GITHUB_REF_NAME#v}
           IMAGE=ghcr.io/${{ github.repository }}
+          TAG_ARGS=(-t "${IMAGE}:${REF_NO_HEAD_V}")
+          if [[ "$GITHUB_REF_NAME" != *-rc* ]]; then
+            TAG_ARGS+=(-t "${IMAGE}:latest")
+          fi
           docker buildx imagetools create \
-            -t "${IMAGE}:${REF_NO_HEAD_V}" \
-            -t "${IMAGE}:latest" \
+            "${TAG_ARGS[@]}" \
             "${IMAGE}:${REF_NO_HEAD_V}-amd64" \
             "${IMAGE}:${REF_NO_HEAD_V}-arm64"
           docker buildx imagetools inspect "${IMAGE}:${REF_NO_HEAD_V}"
