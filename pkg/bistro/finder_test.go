@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/internal/teststub"
 	"github.com/loilo-inc/bistro/pkg/ldd"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/assert"
@@ -22,17 +23,20 @@ func TestFinderTraceDependencies(t *testing.T) {
 	require.NoError(t, os.Symlink("libone.so", alias))
 	lddCalls, lookups := 0, 0
 	pkg := testPackage(t, "shared:arm64", "", "", "unpacked")
-	q := stubQuery{lookup: func(path string) (*dpkg.Package, error) {
+	q := teststub.NewQuery(t)
+	q.LookUpFunc = func(path string) (*dpkg.Package, error) {
 		lookups++
 		assert.Contains(t, []string{first, second}, path)
 		return pkg, nil
-	}}
+	}
 	libs := []*ldd.Library{{Name: "one", Path: rootfs.MustPath(alias)}, {Name: "alias", Path: rootfs.MustPath(first)}, {Name: "missing"}, {Name: "two", Path: rootfs.MustPath(second)}}
-	f := NewFinder(DI{FS: testFS(q), Query: q, Ldd: stubLdd(func(path string) ([]*ldd.Library, error) {
+	resolver := teststub.NewResolver(t)
+	resolver.ListObjectsFunc = func(path rootfs.Path) ([]*ldd.Library, error) {
 		lddCalls++
-		assert.Contains(t, []string{"/bin/one", "/bin/two"}, path)
+		assert.Contains(t, []string{"/bin/one", "/bin/two"}, path.Abs())
 		return libs, nil
-	})})
+	}
+	f := NewFinder(DI{FS: os.DirFS("/"), Query: q, Ldd: resolver})
 	for _, path := range []string{"/bin/one", "/bin/one", "/bin/two"} {
 		result, err := f.TraceDepsForExecutable(rootfs.MustPath(path))
 		require.NoError(t, err)
@@ -64,8 +68,13 @@ func TestFinderFailures(t *testing.T) {
 			if path == "" {
 				path = "/bin/app"
 			}
-			q := stubQuery{lookup: func(string) (*dpkg.Package, error) { return nil, tc.lookupErr }}
-			f := NewFinder(DI{FS: testFS(q), Query: q, Ldd: stubLdd(func(string) ([]*ldd.Library, error) { return []*ldd.Library{{Path: rootfs.MustPath(lib)}}, tc.lddErr })})
+			q := teststub.NewQuery(t)
+			q.LookUpFunc = func(string) (*dpkg.Package, error) { return nil, tc.lookupErr }
+			resolver := teststub.NewResolver(t)
+			resolver.ListObjectsFunc = func(rootfs.Path) ([]*ldd.Library, error) {
+				return []*ldd.Library{{Path: rootfs.MustPath(lib)}}, tc.lddErr
+			}
+			f := NewFinder(DI{FS: os.DirFS("/"), Query: q, Ldd: resolver})
 			result, err := f.TraceDepsForExecutable(rootfs.MustPath(path))
 			assert.Nil(t, result)
 			require.ErrorContains(t, err, tc.want)
@@ -85,18 +94,21 @@ func TestFinderRetriesFailedCommands(t *testing.T) {
 			calls := map[string]int{}
 			fail := func(name string) bool { calls[name]++; return name == stage && calls[name] == 1 }
 			pkg := testPackage(t, "pkg", "", "", "installed")
-			q := stubQuery{lookup: func(string) (*dpkg.Package, error) {
+			q := teststub.NewQuery(t)
+			q.LookUpFunc = func(string) (*dpkg.Package, error) {
 				if fail("lookup") {
 					return nil, failure
 				}
 				return pkg, nil
-			}}
-			f := NewFinder(DI{FS: testFS(q), Query: q, Ldd: stubLdd(func(string) ([]*ldd.Library, error) {
+			}
+			resolver := teststub.NewResolver(t)
+			resolver.ListObjectsFunc = func(rootfs.Path) ([]*ldd.Library, error) {
 				if fail("ldd") {
 					return nil, failure
 				}
 				return []*ldd.Library{{Path: rootfs.MustPath(lib)}}, nil
-			})})
+			}
+			f := NewFinder(DI{FS: os.DirFS("/"), Query: q, Ldd: resolver})
 			_, err := f.TraceDepsForExecutable(rootfs.MustPath("/bin/app"))
 			require.ErrorIs(t, err, failure)
 			result, err := f.TraceDepsForExecutable(rootfs.MustPath("/bin/app"))
@@ -112,11 +124,14 @@ func TestFinderUnownedLibrary(t *testing.T) {
 	lib := filepath.Join(rootFSTempDir(t), "library.so")
 	writeRootFSFile(t, lib, "library", 0644)
 	library := &ldd.Library{Name: "library.so", Path: rootfs.MustPath(lib)}
-	q := stubQuery{lookup: func(path string) (*dpkg.Package, error) {
+	q := teststub.NewQuery(t)
+	q.LookUpFunc = func(path string) (*dpkg.Package, error) {
 		assert.Equal(t, lib, path)
 		return nil, nil
-	}}
-	f := NewFinder(DI{FS: testFS(q), Query: q, Ldd: stubLdd(func(string) ([]*ldd.Library, error) { return []*ldd.Library{library}, nil })})
+	}
+	resolver := teststub.NewResolver(t)
+	resolver.ListObjectsFunc = func(rootfs.Path) ([]*ldd.Library, error) { return []*ldd.Library{library}, nil }
+	f := NewFinder(DI{FS: os.DirFS("/"), Query: q, Ldd: resolver})
 	result, err := f.TraceDepsForExecutable(rootfs.MustPath("/bin/app"))
 	require.NoError(t, err)
 	assert.Empty(t, result.BrokenLibs)
