@@ -46,10 +46,6 @@ func newApp() app.App {
 		Commit:  commit,
 		Date:    date,
 		Cwd:     cwd,
-		DI: bistro.DI{
-			Ldd:    ldd,
-			Query:  query,
-			Logger: logger,
-		},
+		DI:      bistro.NewDI(logger, ldd, query, fs),
 	})
 }
