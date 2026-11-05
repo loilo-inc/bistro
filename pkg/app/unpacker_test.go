@@ -1,15 +1,13 @@
 package app
 
 import (
+	"archive/tar"
 	"bytes"
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
-	"testing/fstest"
 
-	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,34 +18,37 @@ func TestUnpackCommand(t *testing.T) {
 			dir := t.TempDir()
 			for i, name := range []string{"first.tar", "second.tar"} {
 				var buf bytes.Buffer
-				archiver := rootfs.NewArchiver(fstest.MapFS{}, &buf)
+				writer := tar.NewWriter(&buf)
 				content := []byte("long original content")
 				if i == 1 {
 					content = []byte("new")
 				}
-				require.NoError(t, archiver.Add(rootfs.MustPath("/nested/file"), content, 0751))
+				require.NoError(t, writer.WriteHeader(&tar.Header{Name: "nested/file", Typeflag: tar.TypeReg, Mode: 0751, Size: int64(len(content))}))
+				_, err := writer.Write(content)
+				require.NoError(t, err)
 				if i == 0 {
-					require.NoError(t, archiver.Add(rootfs.MustPath("/first-only"), []byte("retained"), 0644))
+					require.NoError(t, writer.WriteHeader(&tar.Header{Name: "first-only", Typeflag: tar.TypeReg, Mode: 0644, Size: 8}))
+					_, err := writer.Write([]byte("retained"))
+					require.NoError(t, err)
 				}
-				require.NoError(t, archiver.Close())
+				require.NoError(t, writer.Close())
 				require.NoError(t, os.WriteFile(filepath.Join(dir, name), buf.Bytes(), 0600))
 			}
 
-			query := &failingLoadQuery{err: errors.New("unpack must not load dpkg")}
-			resolver := &fixtureResolver{t: t, loadErr: errors.New("unpack must not load ld cache")}
-			application := newFixtureRunner(t, fstest.MapFS{}, resolver)
-			application.cwd = dir
-			application.di.Query = query
-			args := []string{"bistro", "unpack", "first.tar", "second.tar"}
+			fixture := newAppFixture(t)
+			fixture.query.LoadErr = errors.New("unpack must not load dpkg")
+			fixture.resolver.LoadErr = errors.New("unpack must not load ld cache")
+			fixture.input.Cwd = dir
+			args := []string{"unpack", "first.tar", "second.tar"}
 			dest := dir
 			if flag != "" {
 				// Match the Dockerfile's flags-after-archive invocation.
 				args = append(args, flag, "output")
 				dest = filepath.Join(dir, "output")
 			}
-			require.NoError(t, application.command().Run(context.Background(), args))
-			assert.Zero(t, query.loads)
-			assert.Zero(t, resolver.loads)
+			require.NoError(t, fixture.run(args...))
+			assert.Zero(t, fixture.query.Loads)
+			assert.Zero(t, fixture.resolver.Loads)
 			content, err := os.ReadFile(filepath.Join(dest, "nested", "file"))
 			require.NoError(t, err)
 			assert.Equal(t, "new", string(content))
