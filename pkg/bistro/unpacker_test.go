@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/loilo-inc/bistro/pkg/internal/testutil"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,6 +62,7 @@ func requireUnpackedFile(t *testing.T, name, body string, mode os.FileMode) {
 }
 
 func TestUnpackerExtractsArchiverOutput(t *testing.T) {
+	testutil.RequireRoot(t)
 	base := rootFSTempDir(t)
 	source := filepath.Join(base, "source")
 	writeRootFSFile(t, filepath.Join(source, "tool"), "executable", 0751)
@@ -83,6 +85,7 @@ func TestUnpackerExtractsArchiverOutput(t *testing.T) {
 }
 
 func TestUnpackerReplacesEntries(t *testing.T) {
+	testutil.RequireRoot(t)
 	entries := map[string]rootFSEntry{
 		"file":    unpackFile("entry", "new", 0640),
 		"dir":     unpackDir("entry", 0700),
@@ -129,6 +132,7 @@ func TestUnpackerReplacesEntries(t *testing.T) {
 }
 
 func TestUnpackerPreservesNonemptyDirectory(t *testing.T) {
+	testutil.RequireRoot(t)
 	for _, replacement := range []rootFSEntry{unpackFile("entry", "new", 0644), unpackLink("entry", "target")} {
 		t.Run(fmt.Sprint(replacement.header.Typeflag), func(t *testing.T) {
 			dest := filepath.Join(t.TempDir(), "rootfs")
@@ -140,6 +144,7 @@ func TestUnpackerPreservesNonemptyDirectory(t *testing.T) {
 }
 
 func TestUnpackerDirectoryModes(t *testing.T) {
+	testutil.RequireRoot(t)
 	for _, mode := range []int64{0750, 0555, 0000} {
 		t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {
 			dest := filepath.Join(t.TempDir(), "rootfs")
@@ -153,90 +158,134 @@ func TestUnpackerDirectoryModes(t *testing.T) {
 	}
 }
 
-func TestUnpackerPreservesExistingDirectoryModes(t *testing.T) {
+func TestUnpackerAppliesExistingDirectoryAttributes(t *testing.T) {
+	testutil.RequireRoot(t)
 	dest := t.TempDir()
 	existing := filepath.Join(dest, "existing")
 	require.NoError(t, os.Mkdir(existing, 0700))
 	require.NoError(t, os.Chmod(existing, 0700))
+	directory := unpackDir("existing", 0750)
+	directory.header.Uid, directory.header.Gid = 12345, 23456
+	implicit := unpackDir("implicit/", 02770)
+	implicit.header.Uid, implicit.header.Gid = 34567, 45678
 	archive := writeUnpackTar(t,
-		unpackDir(".", 0000),
-		unpackDir("existing", 0777),
-		unpackFile("existing/child", "retained permissions", 0640),
+		directory,
+		unpackFile("existing/child", "directory contents", 0640),
 		unpackFile("./implicit/child", "implicit parent", 0644),
-		unpackDir("implicit/", 0000),
+		implicit,
 	)
-	rootInfo, err := os.Stat(dest)
-	require.NoError(t, err)
 	require.NoError(t, NewUnpacker(dest).Unpack(archive))
 	for _, entry := range []struct {
-		name string
-		mode os.FileMode
+		name     string
+		mode     os.FileMode
+		uid, gid uint32
 	}{
-		{".", rootInfo.Mode().Perm()}, {"existing", 0700}, {"implicit", 0755},
+		{"existing", 0750, 12345, 23456}, {"implicit", os.ModeSetgid | 0770, 34567, 45678},
 	} {
-		info, err := os.Stat(filepath.Join(dest, entry.name))
+		name := filepath.Join(dest, entry.name)
+		info, err := os.Lstat(name)
 		require.NoError(t, err)
-		assert.Equal(t, entry.mode, info.Mode().Perm(), entry.name)
+		assert.Equal(t, entry.mode, info.Mode()&(os.ModePerm|os.ModeSetgid), entry.name)
+		stat := info.Sys().(*syscall.Stat_t)
+		assert.Equal(t, entry.uid, stat.Uid, entry.name)
+		assert.Equal(t, entry.gid, stat.Gid, entry.name)
 	}
-	requireUnpackedFile(t, filepath.Join(existing, "child"), "retained permissions", 0640)
+	requireUnpackedFile(t, filepath.Join(existing, "child"), "directory contents", 0640)
 	requireUnpackedFile(t, filepath.Join(dest, "implicit", "child"), "implicit parent", 0644)
 }
 
-func TestUnpackerDoesNotRelaxDirectoryPermissions(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("requires an unprivileged user")
+func TestUnpackerPreservesDestinationAttributes(t *testing.T) {
+	testutil.RequireRoot(t)
+	for _, name := range []string{".", "./", "nested/.."} {
+		t.Run(name, func(t *testing.T) {
+			dest := t.TempDir()
+			require.NoError(t, os.Chown(dest, 10001, 10002))
+			require.NoError(t, os.Chmod(dest, 0750))
+			entry := unpackDir(name, 0000)
+			entry.header.Uid, entry.header.Gid = 12345, 23456
+			archive := writeUnpackTar(t, entry, unpackFile("file", "data", 0644))
+			require.NoError(t, NewUnpacker(dest).Unpack(archive))
+			info, err := os.Stat(dest)
+			require.NoError(t, err)
+			stat := info.Sys().(*syscall.Stat_t)
+			assert.Equal(t, uint32(10001), stat.Uid)
+			assert.Equal(t, uint32(10002), stat.Gid)
+			assert.Equal(t, os.FileMode(0750), info.Mode().Perm())
+			requireUnpackedFile(t, filepath.Join(dest, "file"), "data", 0644)
+		})
 	}
-	for _, existing := range []bool{false, true} {
-		for _, mode := range []os.FileMode{0555, 0000} {
-			t.Run(fmt.Sprintf("existing=%t/mode=%04o", existing, mode), func(t *testing.T) {
-				dest := t.TempDir()
-				target := filepath.Join(dest, "restricted")
-				t.Cleanup(func() { _ = os.Chmod(target, 0700) })
-				requested := int64(mode)
-				if existing {
-					require.NoError(t, os.Mkdir(target, 0700))
-					require.NoError(t, os.Chmod(target, mode))
-					// An archive's writable mode must not relax an existing directory.
-					requested = 0777
-				}
-				archive := writeUnpackTar(t, unpackDir("restricted", requested), unpackFile("restricted/child", "data", 0644))
-				require.ErrorIs(t, NewUnpacker(dest).Unpack(archive), os.ErrPermission)
-				info, err := os.Stat(target)
-				require.NoError(t, err)
-				assert.Equal(t, mode, info.Mode().Perm())
-				require.NoError(t, os.Chmod(target, 0700))
-				_, err = os.Lstat(filepath.Join(target, "child"))
-				require.ErrorIs(t, err, os.ErrNotExist)
-			})
-		}
+}
+
+func TestUnpackerRestoresFileOwnerAndSpecialModes(t *testing.T) {
+	testutil.RequireRoot(t)
+	dest := t.TempDir()
+	entry := unpackFile("executable", "data", 06755)
+	entry.header.Uid, entry.header.Gid = 12345, 23456
+	require.NoError(t, NewUnpacker(dest).Unpack(writeUnpackTar(t, entry)))
+	info, err := os.Lstat(filepath.Join(dest, "executable"))
+	require.NoError(t, err)
+	stat := info.Sys().(*syscall.Stat_t)
+	assert.Equal(t, uint32(12345), stat.Uid)
+	assert.Equal(t, uint32(23456), stat.Gid)
+	assert.Equal(t, os.ModeSetuid|os.ModeSetgid|0755, info.Mode()&(os.ModePerm|os.ModeSetuid|os.ModeSetgid))
+}
+
+func TestUnpackerRestoresSymlinkOwnerWithoutFollowingTarget(t *testing.T) {
+	testutil.RequireRoot(t)
+	for _, targetKind := range []string{"internal", "external", "dangling"} {
+		t.Run(targetKind, func(t *testing.T) {
+			base := t.TempDir()
+			dest := filepath.Join(base, "rootfs")
+			target := "target"
+			var entries []rootFSEntry
+			if targetKind == "internal" {
+				entry := unpackFile("target", "original", 0644)
+				entry.header.Uid, entry.header.Gid = 34567, 45678
+				entries = append(entries, entry)
+			} else if targetKind == "external" {
+				target = filepath.Join(base, "external")
+				require.NoError(t, os.WriteFile(target, []byte("original"), 0644))
+				require.NoError(t, os.Chown(target, 34567, 45678))
+			}
+			link := unpackLink("link", target)
+			link.header.Uid, link.header.Gid = 12345, 23456
+			entries = append(entries, link)
+			require.NoError(t, NewUnpacker(dest).Unpack(writeUnpackTar(t, entries...)))
+			name := filepath.Join(dest, "link")
+			info, err := os.Lstat(name)
+			require.NoError(t, err)
+			stat := info.Sys().(*syscall.Stat_t)
+			assert.Equal(t, uint32(12345), stat.Uid)
+			assert.Equal(t, uint32(23456), stat.Gid)
+			actual, err := os.Readlink(name)
+			require.NoError(t, err)
+			assert.Equal(t, target, actual)
+			if targetKind == "dangling" {
+				return
+			}
+			if targetKind == "internal" {
+				target = filepath.Join(dest, target)
+			}
+			info, err = os.Stat(target)
+			require.NoError(t, err)
+			stat = info.Sys().(*syscall.Stat_t)
+			assert.Equal(t, uint32(34567), stat.Uid)
+			assert.Equal(t, uint32(45678), stat.Gid)
+			requireUnpackedFile(t, target, "original", 0644)
+		})
 	}
 }
 
 func TestUnpackerInternalSymlinkDirectoryReplacement(t *testing.T) {
+	testutil.RequireRoot(t)
 	dest := filepath.Join(t.TempDir(), "rootfs")
 	archive := writeUnpackTar(t, unpackDir("entry", 0555), unpackLink("alias", "."), unpackFile("alias/entry", "replacement", 0640))
 	require.NoError(t, NewUnpacker(dest).Unpack(archive))
 	requireUnpackedFile(t, filepath.Join(dest, "entry"), "replacement", 0640)
 }
 
-func TestUnpackerInternalSymlinkPermissionFailure(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("requires an unprivileged user")
-	}
-	dest := filepath.Join(t.TempDir(), "rootfs")
-	parent := filepath.Join(dest, "a", "b", "c")
-	t.Cleanup(func() { _ = os.Chmod(parent, 0700) })
-	archive := writeUnpackTar(t, unpackDir("a/b/c", 0000), unpackLink("alias", "a/b/c"), unpackDir("alias/leaf", 0000))
-	require.ErrorIs(t, NewUnpacker(dest).Unpack(archive), os.ErrPermission)
-	info, err := os.Stat(parent)
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0000), info.Mode().Perm())
-	require.NoError(t, os.Chmod(parent, 0700))
-	_, err = os.Lstat(filepath.Join(parent, "leaf"))
-	require.ErrorIs(t, err, os.ErrNotExist)
-}
-
 func TestUnpackerExtractsThroughInternalSymlink(t *testing.T) {
+	testutil.RequireRoot(t)
 	dest := filepath.Join(t.TempDir(), "rootfs")
 	archive := writeUnpackTar(t, unpackDir("usr/lib", 0755), unpackLink("lib", "usr/lib"), unpackFile("lib/example.so", "library", 0644))
 	require.NoError(t, NewUnpacker(dest).Unpack(archive))
@@ -247,6 +296,7 @@ func TestUnpackerExtractsThroughInternalSymlink(t *testing.T) {
 }
 
 func TestUnpackerMultipleArchives(t *testing.T) {
+	testutil.RequireRoot(t)
 	dest := filepath.Join(t.TempDir(), "rootfs")
 	u := NewUnpacker(dest)
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dest, "shared"), 0700) })
@@ -265,6 +315,7 @@ func TestUnpackerMultipleArchives(t *testing.T) {
 }
 
 func TestUnpackerRejectsEscapingPaths(t *testing.T) {
+	testutil.RequireRoot(t)
 	for _, name := range []string{"../outside", "nested/../../outside", "/absolute"} {
 		t.Run(name, func(t *testing.T) {
 			base := t.TempDir()
@@ -281,6 +332,7 @@ func TestUnpackerRejectsEscapingPaths(t *testing.T) {
 }
 
 func TestUnpackerRejectsSymlinkEscapes(t *testing.T) {
+	testutil.RequireRoot(t)
 	for _, existing := range []bool{false, true} {
 		for _, absolute := range []bool{false, true} {
 			t.Run(fmt.Sprintf("existing=%t/absolute=%t", existing, absolute), func(t *testing.T) {
@@ -307,6 +359,7 @@ func TestUnpackerRejectsSymlinkEscapes(t *testing.T) {
 }
 
 func TestUnpackerReplacesSymlinkWithoutFollowingIt(t *testing.T) {
+	testutil.RequireRoot(t)
 	base := rootFSTempDir(t)
 	outside := filepath.Join(base, "outside")
 	writeRootFSFile(t, outside, "original", 0644)
@@ -318,6 +371,7 @@ func TestUnpackerReplacesSymlinkWithoutFollowingIt(t *testing.T) {
 }
 
 func TestUnpackerUnsupportedEntryPreservesFileAndDirectoryMode(t *testing.T) {
+	testutil.RequireRoot(t)
 	for _, kind := range []byte{tar.TypeLink, tar.TypeFifo} {
 		t.Run(fmt.Sprint(kind), func(t *testing.T) {
 			dest := filepath.Join(t.TempDir(), "rootfs")
@@ -336,6 +390,7 @@ func TestUnpackerUnsupportedEntryPreservesFileAndDirectoryMode(t *testing.T) {
 }
 
 func TestUnpackerTruncatedFilePreservesDirectoryMode(t *testing.T) {
+	testutil.RequireRoot(t)
 	var buf bytes.Buffer
 	w := tar.NewWriter(&buf)
 	require.NoError(t, w.WriteHeader(&tar.Header{Name: "readonly", Typeflag: tar.TypeDir, Mode: 0555}))
@@ -355,6 +410,7 @@ func TestUnpackerTruncatedFilePreservesDirectoryMode(t *testing.T) {
 }
 
 func TestUnpackerSpecialModes(t *testing.T) {
+	testutil.RequireRoot(t)
 	for _, tc := range []struct {
 		name string
 		mode int64
@@ -394,6 +450,7 @@ func TestUnpackerSpecialModes(t *testing.T) {
 }
 
 func TestUnpackerClosesFilesDuringExtraction(t *testing.T) {
+	testutil.RequireRoot(t)
 	if os.Getenv("BISTRO_TEST_UNPACK_FD_LIMIT") != "1" {
 		binary, err := os.Executable()
 		require.NoError(t, err)

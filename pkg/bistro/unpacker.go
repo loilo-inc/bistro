@@ -85,6 +85,11 @@ func (u *unpacker) extract(root *os.Root, tarFile *os.File) error {
 		}
 		name := filepath.Clean(hdr.Name)
 
+		// skip the current directory entry itself
+		if name == "." {
+			continue
+		}
+
 		info, err := root.Lstat(name)
 		var dirToDir bool
 		switch {
@@ -115,16 +120,16 @@ func (u *unpacker) extract(root *os.Root, tarFile *os.File) error {
 				if err := root.Mkdir(name, mode.Perm()); err != nil {
 					return err
 				}
-				if err := root.Chmod(name, mode); err != nil {
-					return err
-				}
+			}
+			if err := applyModeOwner(root, name, hdr); err != nil {
+				return err
 			}
 		case tar.TypeSymlink:
-			if err := root.Symlink(hdr.Linkname, name); err != nil {
+			if err := handleSymlink(root, name, hdr); err != nil {
 				return err
 			}
 		case tar.TypeReg:
-			if err := u.handleFile(root, name, mode, tr); err != nil {
+			if err := handleFile(root, name, hdr, tr); err != nil {
 				return err
 			}
 		}
@@ -132,10 +137,10 @@ func (u *unpacker) extract(root *os.Root, tarFile *os.File) error {
 	return nil
 }
 
-func (u *unpacker) handleFile(
+func handleFile(
 	root *os.Root,
 	name string,
-	mode os.FileMode,
+	hdr *tar.Header,
 	tr *tar.Reader,
 ) error {
 	// create the file with initial permissions 0600 (read/write for owner only)
@@ -147,8 +152,32 @@ func (u *unpacker) handleFile(
 	if _, err = io.Copy(outFile, tr); err != nil {
 		return err
 	}
-	if err := outFile.Chmod(mode); err != nil {
+	if err := applyModeOwner(root, name, hdr); err != nil {
 		return err
 	}
 	return outFile.Close()
+}
+
+func handleSymlink(
+	root *os.Root,
+	name string,
+	hdr *tar.Header,
+) error {
+	if err := root.Symlink(hdr.Linkname, name); err != nil {
+		return err
+	}
+	if err := root.Lchown(name, hdr.Uid, hdr.Gid); err != nil {
+		return err
+	}
+	return nil
+}
+
+func applyModeOwner(root *os.Root, name string, hdr *tar.Header) error {
+	if err := root.Chown(name, hdr.Uid, hdr.Gid); err != nil {
+		return err
+	}
+	if err := root.Chmod(name, hdr.FileInfo().Mode()); err != nil {
+		return err
+	}
+	return nil
 }

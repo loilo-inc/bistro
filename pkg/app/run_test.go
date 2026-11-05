@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/loilo-inc/bistro/pkg/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,6 +52,7 @@ func TestRunEntrypointReturnsWorkingDirectoryError(t *testing.T) {
 }
 
 func TestRunEntrypointUnpackResolvesWorkingDirectory(t *testing.T) {
+	testutil.RequireRoot(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
 	t.Setenv("LD_LIBRARY_PATH", filepath.Join(dir, "missing-libraries"))

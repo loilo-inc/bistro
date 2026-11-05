@@ -8,11 +8,13 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/loilo-inc/bistro/pkg/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestUnpackCommand(t *testing.T) {
+	testutil.RequireRoot(t)
 	for _, flag := range []string{"", "-d", "--dest"} {
 		t.Run("destination="+flag, func(t *testing.T) {
 			dir := t.TempDir()
