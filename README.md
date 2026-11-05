@@ -37,7 +37,7 @@ The scan result shows that:
 bistro bundle -o ./python3.rootfs.tar /usr/bin/python3
 ```
 
-#### Limitations
+## Limitations
 
 `bistro bundle` cannot automatically collect every dependency. Many files are implicitly required by the application.
 
