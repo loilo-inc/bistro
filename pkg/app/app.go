@@ -97,20 +97,6 @@ func (c *app) command() *cli.Command {
 					})
 				},
 			},
-			{Name: "unpack",
-				ArgsUsage: "UNPACK [tarFiles...]",
-				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:    "dest",
-						Aliases: []string{"d"},
-						Usage:   "Destination directory to unpack into",
-						Value:   ".",
-					},
-				},
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return c.unpack(cmd.String("dest"), cmd.Args().Slice())
-				},
-			},
 		},
 	}
 }
@@ -148,16 +134,6 @@ func (c *app) scan(paths ...rootfs.Path) error {
 func (c *app) bundle(input bistro.BundleInput) error {
 	bundler := bistro.NewBundler(c.DI)
 	return bundler.Bundle(input)
-}
-
-func (c *app) unpack(dest string, files []string) error {
-	unpacker := bistro.NewUnpacker(c.absPath(dest))
-	for _, file := range files {
-		if err := unpacker.Unpack(c.absPath(file)); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (c *app) absPath(p string) string {

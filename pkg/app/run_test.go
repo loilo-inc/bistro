@@ -1,13 +1,9 @@
 package app
 
 import (
-	"archive/tar"
-	"bytes"
 	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/loilo-inc/bistro/pkg/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -49,28 +45,4 @@ func TestRunEntrypointReturnsWorkingDirectoryError(t *testing.T) {
 	require.NoError(t, os.Chmod(dir, 0000))
 	setRunArgs(t, "--version")
 	require.ErrorIs(t, Run("dev", "none", "unknown"), os.ErrPermission)
-}
-
-func TestRunEntrypointUnpackResolvesWorkingDirectory(t *testing.T) {
-	testutil.RequireRoot(t)
-	dir := t.TempDir()
-	t.Chdir(dir)
-	t.Setenv("LD_LIBRARY_PATH", filepath.Join(dir, "missing-libraries"))
-	var buf bytes.Buffer
-	writer := tar.NewWriter(&buf)
-	content := []byte("configuration")
-	require.NoError(t, writer.WriteHeader(&tar.Header{Name: "etc/app.conf", Typeflag: tar.TypeReg, Mode: 0640, Size: int64(len(content))}))
-	_, err := writer.Write(content)
-	require.NoError(t, err)
-	require.NoError(t, writer.Close())
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "input.tar"), buf.Bytes(), 0600))
-	setRunArgs(t, "unpack", "input.tar", "-d", "output")
-	require.NoError(t, Run("dev", "none", "unknown"))
-	name := filepath.Join(dir, "output", "etc", "app.conf")
-	actual, err := os.ReadFile(name)
-	require.NoError(t, err)
-	assert.Equal(t, content, actual)
-	info, err := os.Stat(name)
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0640), info.Mode().Perm())
 }

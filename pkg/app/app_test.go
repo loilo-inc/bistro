@@ -66,7 +66,7 @@ func captureStdout(t *testing.T, run func() error) (string, error) {
 }
 
 func TestHelpWithoutLoadingDependencies(t *testing.T) {
-	for _, command := range []string{"", "scan", "bundle", "unpack"} {
+	for _, command := range []string{"", "scan", "bundle"} {
 		for _, flag := range []string{"--help", "-h"} {
 			t.Run(command+"/"+flag, func(t *testing.T) {
 				fixture := newAppFixture(t)
