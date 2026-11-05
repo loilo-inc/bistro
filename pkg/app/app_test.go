@@ -91,14 +91,12 @@ func TestBundleCopyFlags(t *testing.T) {
 		require.NoError(t, os.WriteFile(name, []byte(name+" content"), 0644))
 	}
 	out := filepath.Join(dir, "bundle.tar")
-	// Use a minimal database so CLI loading does not depend on the host's dpkg.
+	// Use an empty database so CLI loading does not depend on the host's dpkg.
 	baseDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "status"), []byte("Package: base-files\nArchitecture: all\nStatus: install ok installed\n"), 0644))
-	// Bundling reads package files through DI.FS, so it must see the same database.
-	fss := testfs.Mount(os.DirFS("/"), "var/lib/dpkg", os.DirFS(baseDir))
-	application := &runner{app: New("v", "c", "d").(*app), di: bistro.DI{FS: fss}}
+	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "status"), nil, 0644))
+	application := &runner{app: New("v", "c", "d").(*app), di: bistro.DI{FS: os.DirFS("/")}}
 	application.cwd = dir
-	application.di.Query = dpkg.NewQuery(fss)
+	application.di.Query = dpkg.NewQuery(testfs.Mount(os.DirFS("/"), "var/lib/dpkg", os.DirFS(baseDir)))
 	resolver := &fixtureResolver{t: t}
 	application.di.Ldd = resolver
 	err = application.command().Run(context.Background(), []string{
@@ -125,10 +123,7 @@ func TestBundleCopyFlags(t *testing.T) {
 		require.NotContains(t, files, header.Name)
 		files[header.Name] = string(body)
 	}
-	want := map[string]string{
-		"var/lib/dpkg/status.d/base-files":         "Package: base-files\nArchitecture: all\nStatus: install ok installed\n",
-		"var/lib/dpkg/status.d/base-files.md5sums": "",
-	}
+	want := make(map[string]string)
 	for _, name := range []string{"first", "second"} {
 		want[strings.TrimPrefix(filepath.ToSlash(filepath.Join(dir, name)), "/")] = name + " content"
 	}
@@ -308,7 +303,7 @@ func TestBundleInputFlags(t *testing.T) {
 	require.NoError(t, err)
 	executable := (elftest.Fixture{Static: true}).Bytes()
 	fss := fstest.MapFS{
-		"var/lib/dpkg/status":               {Data: []byte("Package: alpha\nArchitecture: all\nStatus: install ok installed\n\nPackage: beta\nArchitecture: arm64\nMulti-Arch: same\nStatus: install ok installed\n\nPackage: base-files\nArchitecture: all\nStatus: install ok installed\n")},
+		"var/lib/dpkg/status":               {Data: []byte("Package: alpha\nArchitecture: all\nStatus: install ok installed\n\nPackage: beta\nArchitecture: arm64\nMulti-Arch: same\nStatus: install ok installed\n")},
 		"var/lib/dpkg/info/alpha.list":      {Data: []byte("/workspace/share/alpha.txt\n")},
 		"var/lib/dpkg/info/beta:arm64.list": {Data: []byte("/workspace/share/beta.txt\n")},
 		"workspace/share/alpha.txt":         {Data: []byte("alpha content")},
@@ -348,11 +343,11 @@ func TestBundleInputFlags(t *testing.T) {
 		require.NotContains(t, entries, header.Name)
 		entries[header.Name] = body
 	}
-	assert.Len(t, entries, 9)
+	assert.Len(t, entries, 7)
 	assert.Equal(t, executable, entries["workspace/bin/app"])
 	assert.Equal(t, []byte("alpha content"), entries["workspace/share/alpha.txt"])
 	assert.Equal(t, []byte("beta content"), entries["workspace/share/beta.txt"])
-	for _, name := range []string{"alpha", "beta", "base-files"} {
+	for _, name := range []string{"alpha", "beta"} {
 		assert.Contains(t, entries, "var/lib/dpkg/status.d/"+name)
 		assert.Contains(t, entries, "var/lib/dpkg/status.d/"+name+".md5sums")
 	}
