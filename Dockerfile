@@ -10,8 +10,7 @@ RUN make main VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE" && \
     mv ./main /usr/local/bin/bistro && \
     bistro bundle /usr/local/bin/bistro \
         -o bistro.tar \
-        --package base-files,ca-certificates \
-        --copy /etc/ssl && \
+        --package base-files && \
     bistro unpack bistro.tar -d rootfs
 
 FROM scratch
