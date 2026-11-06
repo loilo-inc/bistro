@@ -2,6 +2,7 @@ package app
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -26,15 +27,19 @@ type appFixture struct {
 	input    NewInput
 	query    *teststub.Query
 	resolver *teststub.Resolver
+	stdout   *bytes.Buffer
+	stderr   *bytes.Buffer
 }
 
 func newAppFixture(t *testing.T) *appFixture {
 	t.Helper()
 	query := teststub.NewQuery(t)
 	resolver := teststub.NewResolver(t)
+	stdout, stderr := new(bytes.Buffer), new(bytes.Buffer)
 	return &appFixture{
-		query: query, resolver: resolver,
+		query: query, resolver: resolver, stdout: stdout, stderr: stderr,
 		input: NewInput{
+			Stdout: stdout, Stderr: stderr,
 			Version: "v1.2.3", Commit: "abc123", Date: "2026-01-01", Cwd: "/workspace",
 			DI: bistro.DI{
 				Query: query, Ldd: resolver, FS: fstest.MapFS{},
@@ -191,39 +196,53 @@ func readArchiveFiles(t *testing.T, name string) map[string]string {
 }
 
 func TestScanOutput(t *testing.T) {
-	fixture := newAppFixture(t)
-	fixture.input.DI.FS = fstest.MapFS{
-		"workspace/app":          {Data: (elftest.Fixture{}).Bytes()},
-		"workspace/tools/static": {Data: (elftest.Fixture{Static: true}).Bytes()},
-		"workspace/tools/README": {Data: []byte("This is a plain text file.")},
-		"lib/owned.so":           {Data: []byte("owned library")},
-		"lib/unowned.so":         {Data: []byte("unowned library")},
+	for _, tc := range []struct {
+		name           string
+		flags          []string
+		stdout, stderr string
+	}{
+		{name: "default", stdout: "/workspace/app\n  /lib/owned.so => owner:arm64\n  /lib/unowned.so => <none>\n/workspace/tools/static\n", stderr: "  [BROKEN] missing.so\n"},
+		{name: "tree", flags: []string{"--format", "tree"}, stdout: "/workspace/app\n  /lib/owned.so => owner:arm64\n  /lib/unowned.so => <none>\n/workspace/tools/static\n", stderr: "  [BROKEN] missing.so\n"},
+		{name: "list", flags: []string{"--format", "list"}, stdout: "/workspace/app: owner:arm64 /lib/unowned.so\n/workspace/tools/static: \n", stderr: "[BROKEN] missing.so\n"},
+		{name: "flat", flags: []string{"-f", "flat"}, stdout: "owner:arm64 /lib/unowned.so\n", stderr: "[BROKEN] missing.so\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newAppFixture(t)
+			fixture.input.DI.FS = fstest.MapFS{
+				"workspace/app":          {Data: (elftest.Fixture{}).Bytes()},
+				"workspace/tools/static": {Data: (elftest.Fixture{Static: true}).Bytes()},
+				"workspace/tools/README": {Data: []byte("This is a plain text file.")},
+				"lib/owned.so":           {Data: []byte("owned library")},
+				"lib/unowned.so":         {Data: []byte("unowned library")},
+			}
+			packages, err := dpkg.ParseStatus("Package: owner\nArchitecture: arm64\nMulti-Arch: same\n")
+			require.NoError(t, err)
+			require.Len(t, packages, 1)
+			fixture.query.LookUpFunc = func(name string) (*dpkg.Package, error) {
+				if name == "/lib/owned.so" {
+					return packages[0], nil
+				}
+				return nil, nil
+			}
+			fixture.resolver.ListObjectsFunc = func(name rootfs.Path) ([]*ldd.Library, error) {
+				if name == rootfs.MustPath("/workspace/tools/static") {
+					return nil, nil
+				}
+				require.Equal(t, rootfs.MustPath("/workspace/app"), name)
+				return []*ldd.Library{
+					{Name: "owned.so", Path: rootfs.MustPath("/lib/owned.so")},
+					{Name: "unowned.so", Path: rootfs.MustPath("/lib/unowned.so")},
+					{Name: "missing.so"},
+				}, nil
+			}
+			err = fixture.run(append([]string{"scan"}, append(tc.flags, "app", "tools")...)...)
+			require.NoError(t, err)
+			assert.Equal(t, tc.stdout, fixture.stdout.String())
+			assert.Equal(t, tc.stderr, fixture.stderr.String())
+			assert.Equal(t, 1, fixture.query.Loads)
+			assert.Equal(t, 1, fixture.resolver.Loads)
+		})
 	}
-	packages, err := dpkg.ParseStatus("Package: owner\nArchitecture: arm64\nMulti-Arch: same\n")
-	require.NoError(t, err)
-	require.Len(t, packages, 1)
-	fixture.query.LookUpFunc = func(name string) (*dpkg.Package, error) {
-		if name == "/lib/owned.so" {
-			return packages[0], nil
-		}
-		return nil, nil
-	}
-	fixture.resolver.ListObjectsFunc = func(name rootfs.Path) ([]*ldd.Library, error) {
-		if name == rootfs.MustPath("/workspace/tools/static") {
-			return nil, nil
-		}
-		require.Equal(t, rootfs.MustPath("/workspace/app"), name)
-		return []*ldd.Library{
-			{Name: "owned.so", Path: rootfs.MustPath("/lib/owned.so")},
-			{Name: "unowned.so", Path: rootfs.MustPath("/lib/unowned.so")},
-			{Name: "missing.so"},
-		}, nil
-	}
-	output, err := captureStdout(t, func() error { return fixture.run("scan", "app", "tools") })
-	require.NoError(t, err)
-	assert.Equal(t, "/workspace/app\n  /lib/owned.so => owner:arm64\n  /lib/unowned.so => <none>\n  [BROKEN] missing.so\n/workspace/tools/static\n", output)
-	assert.Equal(t, 1, fixture.query.Loads)
-	assert.Equal(t, 1, fixture.resolver.Loads)
 }
 
 func TestScanErrorsProduceNoPartialOutput(t *testing.T) {
@@ -249,9 +268,10 @@ func TestScanErrorsProduceNoPartialOutput(t *testing.T) {
 				}
 				return nil, tc.scanErr
 			}
-			output, err := captureStdout(t, func() error { return fixture.run(append([]string{"scan"}, tc.args...)...) })
+			err := fixture.run(append([]string{"scan"}, tc.args...)...)
 			require.ErrorIs(t, err, tc.errorWant)
-			assert.Empty(t, output)
+			assert.Empty(t, fixture.stdout.String())
+			assert.Empty(t, fixture.stderr.String())
 		})
 	}
 }

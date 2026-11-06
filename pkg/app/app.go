@@ -3,10 +3,16 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"path"
+	"strings"
 
 	"github.com/loilo-inc/bistro/pkg/bistro"
+	"github.com/loilo-inc/bistro/pkg/dpkg"
+	"github.com/loilo-inc/bistro/pkg/ldd"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
+	"github.com/loilo-inc/bistro/pkg/util"
 	"github.com/urfave/cli/v3"
 )
 
@@ -26,6 +32,8 @@ type NewInput struct {
 	Date    string
 	Cwd     string
 	DI      bistro.DI
+	Stdout  io.Writer
+	Stderr  io.Writer
 }
 
 func New(input NewInput) App {
@@ -51,6 +59,14 @@ func (c *app) command() *cli.Command {
 			{
 				Name:      "scan",
 				ArgsUsage: "SCAN [fileorDirs...]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "format",
+						Aliases: []string{"f"},
+						Usage:   "Output format (list, flat, tree)",
+						Value:   "tree",
+					},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() == 0 {
 						return fmt.Errorf("scan requires at least one file or directory")
@@ -58,7 +74,17 @@ func (c *app) command() *cli.Command {
 					if err := c.load(); err != nil {
 						return err
 					}
-					return c.scan(c.rootfsPaths(cmd.Args().Slice()...)...)
+					paths := c.rootfsPaths(cmd.Args().Slice()...)
+					format := cmd.String("format")
+					switch format {
+					case "list":
+						return c.scanList(false, paths...)
+					case "flat":
+						return c.scanList(true, paths...)
+					case "tree":
+						return c.scanTree(paths...)
+					}
+					return fmt.Errorf("unknown format: %s", format)
 				},
 			},
 			{
@@ -105,7 +131,68 @@ func (c *app) Run(ctx context.Context, args []string) error {
 	return c.command().Run(ctx, args)
 }
 
-func (c *app) scan(paths ...rootfs.Path) error {
+func (c *app) scan(paths ...rootfs.Path) ([]*bistro.ElfDependency, error) {
+	scanner := bistro.NewScanner(c.DI)
+	var elfDeps []*bistro.ElfDependency
+	for _, path := range paths {
+		deps, err := scanner.Scan(path)
+		if err != nil {
+			return nil, err
+		}
+		elfDeps = append(elfDeps, deps...)
+	}
+	return elfDeps, nil
+}
+
+func (c *app) scanList(flat bool, paths ...rootfs.Path) error {
+	list, err := c.scan(paths...)
+	if err != nil {
+		return err
+	}
+	pkgs := util.Map[string, *dpkg.Package]{}
+	libs := util.Map[string, *ldd.Library]{}
+	joinDeps := func() string {
+		var deps []string
+		for _, pkg := range pkgs.Iter() {
+			deps = append(deps, pkg.NameWithArch())
+		}
+		for _, lib := range libs.Iter() {
+			deps = append(deps, lib.Path.Abs())
+		}
+		return strings.Join(deps, " ")
+	}
+	for _, elfDep := range list {
+		for _, exeDep := range elfDep.Dependencies {
+			if exeDep.Package != nil {
+				pkgs.Set(exeDep.Package.NameWithArch(), exeDep.Package)
+			} else {
+				libs.Set(exeDep.Library.Path.Abs(), exeDep.Library)
+			}
+		}
+		for _, broken := range elfDep.BrokenLibs {
+			c.errorf("[BROKEN] %s\n", broken)
+		}
+		var deps []string
+		for _, pkg := range pkgs.Iter() {
+			deps = append(deps, pkg.NameWithArch())
+		}
+		for _, lib := range libs.Iter() {
+			deps = append(deps, lib.Path.Abs())
+		}
+		if !flat {
+			c.printf("%s: %s\n", elfDep.ElfFile.Path, joinDeps())
+			pkgs.Clear()
+			libs.Clear()
+		}
+	}
+	if flat {
+		c.printf("%s\n", joinDeps())
+	}
+	return nil
+}
+
+func (c *app) scanTree(
+	paths ...rootfs.Path) error {
 	scanner := bistro.NewScanner(c.DI)
 	var elfDeps []*bistro.ElfDependency
 	for _, path := range paths {
@@ -116,19 +203,40 @@ func (c *app) scan(paths ...rootfs.Path) error {
 		elfDeps = append(elfDeps, deps...)
 	}
 	for _, elfDep := range elfDeps {
-		fmt.Printf("%s\n", elfDep.ElfFile.Path)
+		c.printf("%s\n", elfDep.ElfFile.Path)
 		for _, exeDep := range elfDep.Dependencies {
 			pkgName := "<none>"
 			if exeDep.Package != nil {
 				pkgName = exeDep.Package.NameWithArch()
 			}
-			fmt.Printf("  %s => %s\n", exeDep.Library.Path, pkgName)
+			c.printf("  %s => %s\n", exeDep.Library.Path, pkgName)
 		}
 		for _, broken := range elfDep.BrokenLibs {
-			fmt.Printf("  [BROKEN] %s\n", broken)
+			c.errorf("  [BROKEN] %s\n", broken)
 		}
 	}
 	return nil
+}
+
+func (c *app) stdout() io.Writer {
+	if c.Stdout != nil {
+		return c.Stdout
+	}
+	return os.Stdout
+}
+
+func (c *app) stderr() io.Writer {
+	if c.Stderr != nil {
+		return c.Stderr
+	}
+	return os.Stderr
+}
+
+func (c *app) printf(format string, args ...any) {
+	fmt.Fprintf(c.stdout(), format, args...)
+}
+func (c *app) errorf(format string, args ...any) {
+	fmt.Fprintf(c.stderr(), format, args...)
 }
 
 func (c *app) bundle(input bistro.BundleInput) error {
