@@ -66,6 +66,10 @@ func (c *app) command() *cli.Command {
 						Usage:   "Output format (list, flat, tree)",
 						Value:   "tree",
 					},
+					&cli.StringSliceFlag{
+						Name:  "exclude",
+						Usage: "Files or directories to exclude from scanning.",
+					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() == 0 {
@@ -74,15 +78,16 @@ func (c *app) command() *cli.Command {
 					if err := c.load(); err != nil {
 						return err
 					}
-					paths := c.rootfsPaths(cmd.Args().Slice()...)
+					paths := c.rootfsPaths(cmd.Args().Slice())
+					excludes := c.rootfsPaths(cmd.StringSlice("exclude"))
 					format := cmd.String("format")
 					switch format {
 					case "list":
-						return c.scanList(false, paths...)
+						return c.scanList(paths, excludes, false)
 					case "flat":
-						return c.scanList(true, paths...)
+						return c.scanList(paths, excludes, true)
 					case "tree":
-						return c.scanTree(paths...)
+						return c.scanTree(paths, excludes)
 					}
 					return fmt.Errorf("unknown format: %s", format)
 				},
@@ -99,7 +104,11 @@ func (c *app) command() *cli.Command {
 					},
 					&cli.StringSliceFlag{
 						Name:  "scan",
-						Usage: "Executable or directories to scan for dependencies",
+						Usage: "Executable or directories to scan for dependencies.",
+					},
+					&cli.StringSliceFlag{
+						Name:  "exclude-scan",
+						Usage: "Files or directories to exclude from scanning.",
 					},
 					&cli.StringSliceFlag{
 						Name:  "package",
@@ -107,7 +116,11 @@ func (c *app) command() *cli.Command {
 					},
 					&cli.StringSliceFlag{
 						Name:  "copy",
-						Usage: "Files or directories to copy into the root filesystem",
+						Usage: "Files or directories to copy into the root filesystem.",
+					},
+					&cli.StringSliceFlag{
+						Name:  "exclude-copy",
+						Usage: "Files or directories to exclude from copying.",
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -115,11 +128,13 @@ func (c *app) command() *cli.Command {
 						return err
 					}
 					return c.bundle(bistro.BundleInput{
-						Out:      c.absPath(cmd.String("out")),
-						Files:    c.rootfsPaths(cmd.Args().Slice()...),
-						Scans:    c.rootfsPaths(cmd.StringSlice("scan")...),
-						Packages: cmd.StringSlice("package"),
-						Copies:   c.rootfsPaths(cmd.StringSlice("copy")...),
+						Out:           c.absPath(cmd.String("out")),
+						Files:         c.rootfsPaths(cmd.Args().Slice()),
+						Scans:         c.rootfsPaths(cmd.StringSlice("scan")),
+						Packages:      cmd.StringSlice("package"),
+						Copies:        c.rootfsPaths(cmd.StringSlice("copy")),
+						ExcludeScans:  c.rootfsPaths(cmd.StringSlice("exclude-scan")),
+						ExcludeCopies: c.rootfsPaths(cmd.StringSlice("exclude-copy")),
 					})
 				},
 			},
@@ -131,11 +146,11 @@ func (c *app) Run(ctx context.Context, args []string) error {
 	return c.command().Run(ctx, args)
 }
 
-func (c *app) scan(paths ...rootfs.Path) ([]*bistro.ElfDependency, error) {
+func (c *app) scan(paths []rootfs.Path, excludes []rootfs.Path) ([]*bistro.ElfDependency, error) {
 	scanner := bistro.NewScanner(c.DI)
 	var elfDeps []*bistro.ElfDependency
 	for _, path := range paths {
-		deps, err := scanner.Scan(path)
+		deps, err := scanner.Scan(path, excludes)
 		if err != nil {
 			return nil, err
 		}
@@ -144,8 +159,8 @@ func (c *app) scan(paths ...rootfs.Path) ([]*bistro.ElfDependency, error) {
 	return elfDeps, nil
 }
 
-func (c *app) scanList(flat bool, paths ...rootfs.Path) error {
-	list, err := c.scan(paths...)
+func (c *app) scanList(paths []rootfs.Path, excludes []rootfs.Path, flat bool) error {
+	list, err := c.scan(paths, excludes)
 	if err != nil {
 		return err
 	}
@@ -191,12 +206,11 @@ func (c *app) scanList(flat bool, paths ...rootfs.Path) error {
 	return nil
 }
 
-func (c *app) scanTree(
-	paths ...rootfs.Path) error {
+func (c *app) scanTree(paths []rootfs.Path, excludes []rootfs.Path) error {
 	scanner := bistro.NewScanner(c.DI)
 	var elfDeps []*bistro.ElfDependency
 	for _, path := range paths {
-		deps, err := scanner.Scan(path)
+		deps, err := scanner.Scan(path, excludes)
 		if err != nil {
 			return err
 		}
@@ -251,7 +265,7 @@ func (c *app) absPath(p string) string {
 	return path.Join(c.Cwd, p)
 }
 
-func (c *app) rootfsPaths(paths ...string) []rootfs.Path {
+func (c *app) rootfsPaths(paths []string) []rootfs.Path {
 	var result []rootfs.Path
 	for _, p := range paths {
 		result = append(result, rootfs.MustPath(c.absPath(p)))
