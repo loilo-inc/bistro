@@ -276,6 +276,68 @@ func TestScanErrorsProduceNoPartialOutput(t *testing.T) {
 	}
 }
 
+func TestScanExcludeFlags(t *testing.T) {
+	for _, tc := range []struct{ format, want string }{
+		{"tree", "/workspace/tools/cache-old/app\n  /lib/kept.so => <none>\n"},
+		{"list", "/workspace/tools/cache-old/app: /lib/kept.so\n"},
+		{"flat", "/lib/kept.so\n"},
+	} {
+		t.Run(tc.format, func(t *testing.T) {
+			fixture := newAppFixture(t)
+			executable := (elftest.Fixture{}).Bytes()
+			fixture.input.DI.FS = fstest.MapFS{
+				"workspace/tools/cache/app":     {Data: executable},
+				"workspace/tools/ignored":       {Data: executable},
+				"workspace/tools/cache-old/app": {Data: executable},
+				"lib/kept.so":                   {Data: []byte("library")},
+			}
+			fixture.query.LookUpFunc = func(string) (*dpkg.Package, error) { return nil, nil }
+			var scanned []rootfs.Path
+			fixture.resolver.ListObjectsFunc = func(name rootfs.Path) ([]*ldd.Library, error) {
+				scanned = append(scanned, name)
+				require.Equal(t, rootfs.MustPath("/workspace/tools/cache-old/app"), name)
+				return []*ldd.Library{{Name: "kept.so", Path: rootfs.MustPath("/lib/kept.so")}}, nil
+			}
+			require.NoError(t, fixture.run("scan", "--format", tc.format,
+				"--exclude", "tools/cache", "--exclude", "/workspace/tools/ignored",
+				"tools", "tools/cache/app", "tools/ignored"))
+			assert.Equal(t, tc.want, fixture.stdout.String())
+			assert.Empty(t, fixture.stderr.String())
+			assert.Equal(t, rootfs.MustPaths("/workspace/tools/cache-old/app"), scanned)
+		})
+	}
+}
+
+func TestBundleExcludeFlags(t *testing.T) {
+	fixture := newAppFixture(t)
+	executable := (elftest.Fixture{}).Bytes()
+	fixture.input.DI.FS = fstest.MapFS{
+		"workspace/content/cache/app":     {Data: executable},
+		"workspace/content/scan-only":     {Data: executable},
+		"workspace/content/copy-only":     {Data: executable},
+		"workspace/content/cache-old/app": {Data: executable},
+	}
+	fixture.query.LookUpFunc = func(string) (*dpkg.Package, error) { return nil, nil }
+	var scanned []rootfs.Path
+	fixture.resolver.ListObjectsFunc = func(name rootfs.Path) ([]*ldd.Library, error) {
+		scanned = append(scanned, name)
+		return nil, nil
+	}
+	out := filepath.Join(t.TempDir(), "bundle.tar")
+	require.NoError(t, fixture.run("bundle", "-o", out,
+		"--scan", "content", "--scan", "content/cache/app", "--scan", "content/scan-only",
+		"--copy", "content", "--copy", "content/cache/app", "--copy", "content/copy-only",
+		"--exclude-scan", "content/cache", "--exclude-scan", "/workspace/content/scan-only",
+		"--exclude-copy", "content/cache", "--exclude-copy", "/workspace/content/copy-only"))
+	assert.Equal(t, rootfs.MustPaths("/workspace/content/cache-old/app", "/workspace/content/copy-only"), scanned)
+	assert.Equal(t, map[string]string{
+		"workspace/content/cache-old/app": string(executable),
+		"workspace/content/scan-only":     string(executable),
+	}, readArchiveFiles(t, out))
+	assert.Empty(t, fixture.stdout.String())
+	assert.Empty(t, fixture.stderr.String())
+}
+
 func TestBundleInputFlags(t *testing.T) {
 	fixture := newAppFixture(t)
 	fixture.input.Cwd = t.TempDir()
