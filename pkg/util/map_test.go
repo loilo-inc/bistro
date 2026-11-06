@@ -92,3 +92,53 @@ func TestMapClear(t *testing.T) {
 	require.Equal(t, 1, m.Size())
 	require.Same(t, &value, m.Get("again"))
 }
+
+func TestMapIterEmpty(t *testing.T) {
+	for _, state := range []string{"zero value", "cleared", "deleted"} {
+		t.Run(state, func(t *testing.T) {
+			var m util.Map[string, int]
+			switch state {
+			case "cleared":
+				m.Set("key", 42)
+				m.Clear()
+			case "deleted":
+				m.Set("key", 42)
+				m.Delete("key")
+			}
+			for range m.Iter() {
+				t.Fatal("empty map yielded an entry")
+			}
+		})
+	}
+}
+
+func TestMapIterEntries(t *testing.T) {
+	var m util.Map[string, int]
+	m.Set("first", 42)
+	m.Set("first", 99)
+	m.Set("zero", 0)
+	m.Set("deleted", 7)
+	m.Delete("deleted")
+
+	got := make(map[string]int)
+	for key, value := range m.Iter() {
+		require.NotContains(t, got, key)
+		got[key] = value
+	}
+	require.Equal(t, map[string]int{"first": 99, "zero": 0}, got)
+}
+
+func TestMapIterEarlyStop(t *testing.T) {
+	var m util.Map[string, int]
+	m.Set("first", 42)
+	m.Set("second", 99)
+
+	count := 0
+	for key, value := range m.Iter() {
+		require.Equal(t, m.Get(key), value)
+		count++
+		break
+	}
+	require.Equal(t, 1, count)
+	require.Equal(t, 2, m.Size())
+}

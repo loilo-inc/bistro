@@ -81,9 +81,10 @@ func (c *app) command() *cli.Command {
 						return c.scanList(false, paths...)
 					case "flat":
 						return c.scanList(true, paths...)
-					default:
+					case "tree":
 						return c.scanTree(paths...)
 					}
+					return fmt.Errorf("unknown format: %s", format)
 				},
 			},
 			{
@@ -169,7 +170,7 @@ func (c *app) scanList(flat bool, paths ...rootfs.Path) error {
 			}
 		}
 		for _, broken := range elfDep.BrokenLibs {
-			fmt.Printf("[BROKEN] %s\n", broken)
+			c.errorf("[BROKEN] %s\n", broken)
 		}
 		var deps []string
 		for _, pkg := range pkgs.Iter() {
@@ -179,13 +180,13 @@ func (c *app) scanList(flat bool, paths ...rootfs.Path) error {
 			deps = append(deps, lib.Path.Abs())
 		}
 		if !flat {
-			fmt.Printf("%s: %s\n", elfDep.ElfFile.Path, joinDeps())
+			c.printf("%s: %s\n", elfDep.ElfFile.Path, joinDeps())
 			pkgs.Clear()
 			libs.Clear()
 		}
 	}
 	if flat {
-		fmt.Printf("%s\n", joinDeps())
+		c.printf("%s\n", joinDeps())
 	}
 	return nil
 }
