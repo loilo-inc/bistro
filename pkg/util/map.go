@@ -1,5 +1,7 @@
 package util
 
+import "iter"
+
 type Map[K comparable, V any] struct {
 	data map[K]V
 }
@@ -50,4 +52,17 @@ func (m *Map[K, V]) Has(key K) bool {
 	}
 	_, ok := m.data[key]
 	return ok
+}
+
+func (m *Map[K, V]) Iter() iter.Seq2[K, V] {
+	return func(yield func(K, V) bool) {
+		if m.data == nil {
+			return
+		}
+		for k, v := range m.data {
+			if !yield(k, v) {
+				return
+			}
+		}
+	}
 }

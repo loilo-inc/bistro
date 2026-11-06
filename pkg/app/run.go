@@ -28,6 +28,8 @@ func Run(version, commit, date string) error {
 		Date:    date,
 		Cwd:     cwd,
 		DI:      bistro.NewDI(logger, ldd, query, fs),
+		Stdout:  os.Stdout,
+		Stderr:  os.Stderr,
 	})
 	ctx := context.Background()
 	if err := cli.Run(ctx, os.Args); err != nil {
