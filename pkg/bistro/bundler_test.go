@@ -37,7 +37,7 @@ func TestBundlerMergesInputs(t *testing.T) {
 	}
 	b := NewBundler(DI{FS: d.fs, Query: d.query})
 	var scanned []string
-	b.scanner = stubScanner(func(path string) ([]*ElfDependency, error) {
+	b.scanner = stubScanner(func(path string, _ []rootfs.Path) ([]*ElfDependency, error) {
 		scanned = append(scanned, path)
 		return []*ElfDependency{{
 			ElfFile: &ElfFile{Path: rootfs.MustPath(path)},
@@ -70,7 +70,7 @@ func TestBundlerInterpreterWithoutDynamicSegment(t *testing.T) {
 			elftest.Write(t, loader, elftest.Fixture{Static: true})
 			di := DI{FS: os.DirFS("/"), Query: unownedFilesQuery(t)}
 			di.Ldd = ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: di.FS})
-			deps, err := NewScanner(di).Scan(rootfs.MustPath(app))
+			deps, err := NewScanner(di).Scan(rootfs.MustPath(app), nil)
 			require.NoError(t, err)
 			require.Len(t, deps, 1)
 			require.Len(t, deps[0].Dependencies, 1)
@@ -97,6 +97,29 @@ func TestBundlerPackageOnly(t *testing.T) {
 	out := filepath.Join(dir, "bundle.tar")
 	require.NoError(t, NewBundler(DI{FS: d.fs, Query: d.query}).Bundle(BundleInput{Out: out, Packages: []string{"fonts"}}))
 	assert.Equal(t, "font data", readBundleTar(t, out)[rootFSArchiveName(file)].body)
+}
+
+func TestBundlerCopyExclusions(t *testing.T) {
+	dir := rootFSTempDir(t)
+	source := filepath.Join(dir, "source")
+	excluded := filepath.Join(source, "cache")
+	ignoredFile := filepath.Join(source, "ignored")
+	kept := filepath.Join(source, "cache-old", "data")
+	child := filepath.Join(excluded, "data")
+	for _, file := range []string{ignoredFile, kept, child} {
+		writeRootFSFile(t, file, "content", 0644)
+	}
+	out := filepath.Join(dir, "bundle.tar")
+	b := NewBundler(DI{FS: os.DirFS("/")})
+	require.NoError(t, b.Bundle(BundleInput{
+		Out: out, Copies: rootfs.MustPaths(source, child, ignoredFile),
+		ExcludeCopies: rootfs.MustPaths(excluded, ignoredFile),
+	}))
+	entries := readBundleTar(t, out)
+	assert.Equal(t, "content", entries[rootFSArchiveName(kept)].body)
+	for _, file := range []string{excluded, child, ignoredFile} {
+		assert.NotContains(t, entries, rootFSArchiveName(file))
+	}
 }
 
 func TestBundlerWithUnselectedMultiarchPackages(t *testing.T) {
@@ -228,7 +251,7 @@ func TestBundlerFailures(t *testing.T) {
 			d := packageFilesFixture(t, nil, nil)
 			b := NewBundler(DI{FS: d.fs, Query: d.query, Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: d.fs})})
 			input := BundleInput{Out: out}
-			b.scanner = stubScanner(func(path string) ([]*ElfDependency, error) {
+			b.scanner = stubScanner(func(path string, _ []rootfs.Path) ([]*ElfDependency, error) {
 				switch stage {
 				case "file scan", "directory scan":
 					return nil, failure

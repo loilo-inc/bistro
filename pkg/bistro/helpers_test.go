@@ -37,9 +37,11 @@ func unownedFilesQuery(t testing.TB) *teststub.Query {
 	return q
 }
 
-type stubScanner func(string) ([]*ElfDependency, error)
+type stubScanner func(string, []rootfs.Path) ([]*ElfDependency, error)
 
-func (s stubScanner) Scan(path rootfs.Path) ([]*ElfDependency, error) { return s(path.Abs()) }
+func (s stubScanner) Scan(path rootfs.Path, excludes []rootfs.Path) ([]*ElfDependency, error) {
+	return s(path.Abs(), excludes)
+}
 
 // Generate an aarch64 ELF fixture, independent of the test host's executable
 // format, CPU, compiler, ldd and dpkg installation. A fixture with an
