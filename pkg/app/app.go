@@ -3,12 +3,9 @@ package app
 import (
 	"context"
 	"fmt"
-	"os"
 	"path"
 
 	"github.com/loilo-inc/bistro/pkg/bistro"
-	"github.com/loilo-inc/bistro/pkg/dpkg"
-	"github.com/loilo-inc/bistro/pkg/ldd"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/urfave/cli/v3"
 )
@@ -18,36 +15,38 @@ type App interface {
 }
 
 type app struct {
-	version string
-	commit  string
-	date    string
+	NewInput
 }
 
 var _ App = (*app)(nil)
 
-func New(version, commit, date string) App {
-	return &app{
-		version: version,
-		commit:  commit,
-		date:    date,
-	}
+type NewInput struct {
+	Version string
+	Commit  string
+	Date    string
+	Cwd     string
+	DI      bistro.DI
 }
 
-func (c *runner) load() error {
-	if err := c.di.Query.Load(); err != nil {
+func New(input NewInput) App {
+	return &app{NewInput: input}
+}
+
+func (c *app) load() error {
+	if err := c.DI.Query.Load(); err != nil {
 		return err
 	}
-	if err := c.di.Ldd.Load(); err != nil {
+	if err := c.DI.Ldd.Load(); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (c *runner) command() *cli.Command {
+func (c *app) command() *cli.Command {
 	return &cli.Command{
 		Name:    "bistro",
 		Usage:   "Build a distroless root filesystem",
-		Version: fmt.Sprintf("%s (commit: %s, date: %s)", c.version, c.commit, c.date),
+		Version: fmt.Sprintf("%s (commit: %s, date: %s)", c.Version, c.Commit, c.Date),
 		Commands: []*cli.Command{
 			{
 				Name:      "scan",
@@ -102,40 +101,12 @@ func (c *runner) command() *cli.Command {
 	}
 }
 
-type runner struct {
-	*app
-	di  bistro.DI
-	cwd string
-}
-
 func (c *app) Run(ctx context.Context, args []string) error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	fs := os.DirFS("/")
-	ldd := ldd.NewResolver(ldd.ResolverOptions{
-		Cwd:           cwd,
-		LdLibraryPath: os.Getenv("LD_LIBRARY_PATH"),
-		FS:            fs,
-	})
-	query := dpkg.NewQuery(fs)
-	logger := bistro.NewLogger(os.Stdout, os.Stderr)
-	r := &runner{
-		di: bistro.DI{
-			Query:  query,
-			Ldd:    ldd,
-			Logger: logger,
-			FS:     fs,
-		},
-		app: c,
-		cwd: cwd,
-	}
-	return r.command().Run(ctx, args)
+	return c.command().Run(ctx, args)
 }
 
-func (c *runner) scan(paths ...rootfs.Path) error {
-	scanner := bistro.NewScanner(c.di)
+func (c *app) scan(paths ...rootfs.Path) error {
+	scanner := bistro.NewScanner(c.DI)
 	var elfDeps []*bistro.ElfDependency
 	for _, path := range paths {
 		deps, err := scanner.Scan(path)
@@ -160,19 +131,19 @@ func (c *runner) scan(paths ...rootfs.Path) error {
 	return nil
 }
 
-func (c *runner) bundle(input bistro.BundleInput) error {
-	bundler := bistro.NewBundler(c.di)
+func (c *app) bundle(input bistro.BundleInput) error {
+	bundler := bistro.NewBundler(c.DI)
 	return bundler.Bundle(input)
 }
 
-func (c *runner) absPath(p string) string {
+func (c *app) absPath(p string) string {
 	if path.IsAbs(p) {
 		return p
 	}
-	return path.Join(c.cwd, p)
+	return path.Join(c.Cwd, p)
 }
 
-func (c *runner) rootfsPaths(paths ...string) []rootfs.Path {
+func (c *app) rootfsPaths(paths ...string) []rootfs.Path {
 	var result []rootfs.Path
 	for _, p := range paths {
 		result = append(result, rootfs.MustPath(c.absPath(p)))

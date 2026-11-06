@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 
@@ -16,9 +15,7 @@ var (
 )
 
 func main() {
-	cli := app.New(version, commit, date)
-	ctx := context.Background()
-	if err := cli.Run(ctx, os.Args); err != nil {
+	if err := app.Run(version, commit, date); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

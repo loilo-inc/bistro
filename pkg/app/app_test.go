@@ -2,7 +2,6 @@ package app
 
 import (
 	"archive/tar"
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -16,118 +15,37 @@ import (
 	"github.com/loilo-inc/bistro/pkg/bistro"
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/internal/elftest"
-	"github.com/loilo-inc/bistro/pkg/internal/testfs"
+	"github.com/loilo-inc/bistro/pkg/internal/teststub"
 	"github.com/loilo-inc/bistro/pkg/ldd"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// Unconfigured dependency scans fail instead of using the host's ld.so.cache.
-type fixtureResolver struct {
-	t           *testing.T
-	loads       int
-	loadErr     error
-	listObjects func(rootfs.Path) ([]*ldd.Library, error)
+type appFixture struct {
+	input    NewInput
+	query    *teststub.Query
+	resolver *teststub.Resolver
 }
 
-func (r *fixtureResolver) Load() error {
-	r.t.Helper()
-	r.loads++
-	return r.loadErr
-}
-
-func (r *fixtureResolver) ListObjects(path rootfs.Path) ([]*ldd.Library, error) {
-	r.t.Helper()
-	if r.listObjects != nil {
-		return r.listObjects(path)
-	}
-	r.t.Fatal("unexpected ELF dependency scan")
-	return nil, nil
-}
-
-func TestHelpWithoutDpkgDatabase(t *testing.T) {
-	for _, command := range []string{"", "scan", "bundle"} {
-		for _, flag := range []string{"--help", "-h"} {
-			t.Run(command+"/"+flag, func(t *testing.T) {
-				query := dpkg.NewQuery(os.DirFS(t.TempDir()))
-				require.ErrorIs(t, query.Load(), os.ErrNotExist)
-
-				reader, writer, err := os.Pipe()
-				require.NoError(t, err)
-				stdout := os.Stdout
-				os.Stdout = writer
-				t.Cleanup(func() {
-					os.Stdout = stdout
-					_ = writer.Close()
-					_ = reader.Close()
-				})
-				application := &runner{app: New("v", "c", "d").(*app), di: bistro.DI{FS: os.DirFS("/")}}
-				application.di.Query = query
-				resolver := &fixtureResolver{t: t}
-				application.di.Ldd = resolver
-				args := []string{"bistro"}
-				if command != "" {
-					args = append(args, command)
-				}
-				args = append(args, flag)
-				require.NoError(t, application.command().Run(context.Background(), args))
-				assert.Zero(t, resolver.loads)
-				require.NoError(t, writer.Close())
-				output, err := io.ReadAll(reader)
-				require.NoError(t, err)
-				assert.Contains(t, string(output), "USAGE:")
-				assert.Contains(t, string(output), strings.TrimSpace("bistro "+command))
-			})
-		}
+func newAppFixture(t *testing.T) *appFixture {
+	t.Helper()
+	query := teststub.NewQuery(t)
+	resolver := teststub.NewResolver(t)
+	return &appFixture{
+		query: query, resolver: resolver,
+		input: NewInput{
+			Version: "v1.2.3", Commit: "abc123", Date: "2026-01-01", Cwd: "/workspace",
+			DI: bistro.DI{
+				Query: query, Ldd: resolver, FS: fstest.MapFS{},
+				Logger: bistro.NewLogger(io.Discard, io.Discard),
+			},
+		},
 	}
 }
 
-func TestBundleCopyFlags(t *testing.T) {
-	dir, err := filepath.EvalSymlinks(t.TempDir())
-	require.NoError(t, err)
-	t.Chdir(dir)
-	for _, name := range []string{"first", "second"} {
-		require.NoError(t, os.WriteFile(name, []byte(name+" content"), 0644))
-	}
-	out := filepath.Join(dir, "bundle.tar")
-	// Use an empty database so CLI loading does not depend on the host's dpkg.
-	baseDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "status"), nil, 0644))
-	application := &runner{app: New("v", "c", "d").(*app), di: bistro.DI{FS: os.DirFS("/")}}
-	application.cwd = dir
-	application.di.Query = dpkg.NewQuery(testfs.Mount(os.DirFS("/"), "var/lib/dpkg", os.DirFS(baseDir)))
-	resolver := &fixtureResolver{t: t}
-	application.di.Ldd = resolver
-	err = application.command().Run(context.Background(), []string{
-		"bistro", "bundle", "-o", out, "--copy", "first", "--copy", "second",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 1, resolver.loads)
-	f, err := os.Open(out)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = f.Close() })
-	reader := tar.NewReader(f)
-	files := make(map[string]string)
-	for {
-		header, err := reader.Next()
-		if err == io.EOF {
-			break
-		}
-		require.NoError(t, err)
-		if header.Typeflag != tar.TypeReg {
-			continue
-		}
-		body, err := io.ReadAll(reader)
-		require.NoError(t, err)
-		require.NotContains(t, files, header.Name)
-		files[header.Name] = string(body)
-	}
-	want := make(map[string]string)
-	for _, name := range []string{"first", "second"} {
-		want[strings.TrimPrefix(filepath.ToSlash(filepath.Join(dir, name)), "/")] = name + " content"
-	}
-	assert.Equal(t, want, files)
+func (f *appFixture) run(args ...string) error {
+	return New(f.input).Run(context.Background(), append([]string{"bistro"}, args...))
 }
 
 func captureStdout(t *testing.T, run func() error) (string, error) {
@@ -147,15 +65,25 @@ func captureStdout(t *testing.T, run func() error) (string, error) {
 	return string(data), runErr
 }
 
-func newFixtureRunner(t *testing.T, fss fs.FS, resolver ldd.Resolver) *runner {
-	t.Helper()
-	return &runner{
-		app: New("v1.2.3", "abc123", "2026-01-01").(*app),
-		cwd: "/workspace",
-		di: bistro.DI{
-			FS: fss, Query: dpkg.NewQuery(fss), Ldd: resolver,
-			Logger: bistro.NewLogger(io.Discard, io.Discard),
-		},
+func TestHelpWithoutLoadingDependencies(t *testing.T) {
+	for _, command := range []string{"", "scan", "bundle"} {
+		for _, flag := range []string{"--help", "-h"} {
+			t.Run(command+"/"+flag, func(t *testing.T) {
+				fixture := newAppFixture(t)
+				fixture.query.LoadErr = errors.New("unexpected database load")
+				fixture.resolver.LoadErr = errors.New("unexpected ld cache load")
+				args := []string{flag}
+				if command != "" {
+					args = []string{command, flag}
+				}
+				output, err := captureStdout(t, func() error { return fixture.run(args...) })
+				require.NoError(t, err)
+				assert.Contains(t, output, "USAGE:")
+				assert.Contains(t, output, strings.TrimSpace("bistro "+command))
+				assert.Zero(t, fixture.query.Loads)
+				assert.Zero(t, fixture.resolver.Loads)
+			})
+		}
 	}
 }
 
@@ -165,22 +93,15 @@ func TestRunHelpAndVersion(t *testing.T) {
 		{"--version", "bistro version v1.2.3 (commit: abc123, date: 2026-01-01)"},
 	} {
 		t.Run(tc.flag, func(t *testing.T) {
-			output, err := captureStdout(t, func() error {
-				return New("v1.2.3", "abc123", "2026-01-01").Run(context.Background(), []string{"bistro", tc.flag})
-			})
+			fixture := newAppFixture(t)
+			output, err := captureStdout(t, func() error { return fixture.run(tc.flag) })
 			require.NoError(t, err)
 			assert.Contains(t, output, tc.want)
+			assert.Zero(t, fixture.query.Loads)
+			assert.Zero(t, fixture.resolver.Loads)
 		})
 	}
 }
-
-type failingLoadQuery struct {
-	dpkg.Query
-	err   error
-	loads int
-}
-
-func (q *failingLoadQuery) Load() error { q.loads++; return q.err }
 
 func TestCommandValidationBeforeLoading(t *testing.T) {
 	for _, tc := range []struct {
@@ -188,20 +109,17 @@ func TestCommandValidationBeforeLoading(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"scan without paths", []string{"bistro", "scan"}, "scan requires at least one file or directory"},
-		{"bundle without output", []string{"bistro", "bundle"}, "Required flag \"out\" not set"},
+		{"scan without paths", []string{"scan"}, "scan requires at least one file or directory"},
+		{"bundle without output", []string{"bundle"}, "Required flag \"out\" not set"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			query := &failingLoadQuery{err: errors.New("unexpected database load")}
-			resolver := &fixtureResolver{t: t}
-			application := newFixtureRunner(t, fstest.MapFS{}, resolver)
-			application.di.Query = query
-			cmd := application.command()
-			cmd.Writer = io.Discard
-			cmd.ErrWriter = io.Discard
-			require.EqualError(t, cmd.Run(context.Background(), tc.args), tc.want)
-			assert.Zero(t, query.loads)
-			assert.Zero(t, resolver.loads)
+			fixture := newAppFixture(t)
+			fixture.query.LoadErr = errors.New("unexpected database load")
+			fixture.resolver.LoadErr = errors.New("unexpected ld cache load")
+			_, err := captureStdout(t, func() error { return fixture.run(tc.args...) })
+			require.EqualError(t, err, tc.want)
+			assert.Zero(t, fixture.query.Loads)
+			assert.Zero(t, fixture.resolver.Loads)
 		})
 	}
 }
@@ -210,60 +128,102 @@ func TestCommandLoadFailures(t *testing.T) {
 	for _, command := range []string{"scan", "bundle"} {
 		for _, stage := range []string{"dpkg", "ld cache"} {
 			t.Run(command+"/"+stage, func(t *testing.T) {
+				fixture := newAppFixture(t)
 				failure := errors.New("load failed")
-				query := &failingLoadQuery{}
-				resolver := &fixtureResolver{t: t}
 				if stage == "dpkg" {
-					query.err = failure
+					fixture.query.LoadErr = failure
 				} else {
-					resolver.loadErr = failure
+					fixture.resolver.LoadErr = failure
 				}
-				application := newFixtureRunner(t, fstest.MapFS{}, resolver)
-				application.di.Query = query
-				args := []string{"bistro", command, "app"}
+				args := []string{command, "app"}
 				if command == "bundle" {
-					args = []string{"bistro", "bundle", "--out", filepath.Join(t.TempDir(), "bundle.tar")}
+					args = []string{command, "--out", "bundle.tar"}
 				}
-				require.ErrorIs(t, application.command().Run(context.Background(), args), failure)
-				assert.Equal(t, 1, query.loads)
+				require.ErrorIs(t, fixture.run(args...), failure)
+				assert.Equal(t, 1, fixture.query.Loads)
 				if stage == "dpkg" {
-					assert.Zero(t, resolver.loads)
+					assert.Zero(t, fixture.resolver.Loads)
 				} else {
-					assert.Equal(t, 1, resolver.loads)
+					assert.Equal(t, 1, fixture.resolver.Loads)
 				}
 			})
 		}
 	}
 }
 
-func TestScanOutput(t *testing.T) {
-	fss := fstest.MapFS{
-		"var/lib/dpkg/status":                {Data: []byte("Package: owner\nArchitecture: arm64\nMulti-Arch: same\nStatus: install ok installed\n")},
-		"var/lib/dpkg/info/owner:arm64.list": {Data: []byte("/lib/owned.so\n")},
-		"workspace/app":                      {Mode: 0755, Data: (elftest.Fixture{}).Bytes()},
-		"workspace/tools/static":             {Mode: 0755, Data: (elftest.Fixture{Static: true}).Bytes()},
-		"workspace/tools/README":             {Data: []byte("This is a plain text file.")},
-		"lib/owned.so":                       {Data: []byte("owned library")},
-		"lib/unowned.so":                     {Data: []byte("unowned library")},
+func TestBundleCopyFlags(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.input.DI.FS = fstest.MapFS{
+		"workspace/first":  {Data: []byte("first content")},
+		"workspace/second": {Data: []byte("second content")},
 	}
-	resolver := &fixtureResolver{t: t, listObjects: func(path rootfs.Path) ([]*ldd.Library, error) {
-		if path == rootfs.MustPath("/workspace/tools/static") {
+	out := filepath.Join(t.TempDir(), "bundle.tar")
+	require.NoError(t, fixture.run("bundle", "-o", out, "--copy", "first", "--copy", "second"))
+	assert.Equal(t, 1, fixture.query.Loads)
+	assert.Equal(t, 1, fixture.resolver.Loads)
+	assert.Equal(t, map[string]string{
+		"workspace/first": "first content", "workspace/second": "second content",
+	}, readArchiveFiles(t, out))
+}
+
+func readArchiveFiles(t *testing.T, name string) map[string]string {
+	t.Helper()
+	file, err := os.Open(name)
+	require.NoError(t, err)
+	defer file.Close()
+	reader := tar.NewReader(file)
+	files := make(map[string]string)
+	for {
+		hdr, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		body, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		require.NotContains(t, files, hdr.Name)
+		files[hdr.Name] = string(body)
+	}
+	return files
+}
+
+func TestScanOutput(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.input.DI.FS = fstest.MapFS{
+		"workspace/app":          {Data: (elftest.Fixture{}).Bytes()},
+		"workspace/tools/static": {Data: (elftest.Fixture{Static: true}).Bytes()},
+		"workspace/tools/README": {Data: []byte("This is a plain text file.")},
+		"lib/owned.so":           {Data: []byte("owned library")},
+		"lib/unowned.so":         {Data: []byte("unowned library")},
+	}
+	packages, err := dpkg.ParseStatus("Package: owner\nArchitecture: arm64\nMulti-Arch: same\n")
+	require.NoError(t, err)
+	require.Len(t, packages, 1)
+	fixture.query.LookUpFunc = func(name string) (*dpkg.Package, error) {
+		if name == "/lib/owned.so" {
+			return packages[0], nil
+		}
+		return nil, nil
+	}
+	fixture.resolver.ListObjectsFunc = func(name rootfs.Path) ([]*ldd.Library, error) {
+		if name == rootfs.MustPath("/workspace/tools/static") {
 			return nil, nil
 		}
-		require.Equal(t, rootfs.MustPath("/workspace/app"), path)
+		require.Equal(t, rootfs.MustPath("/workspace/app"), name)
 		return []*ldd.Library{
 			{Name: "owned.so", Path: rootfs.MustPath("/lib/owned.so")},
 			{Name: "unowned.so", Path: rootfs.MustPath("/lib/unowned.so")},
 			{Name: "missing.so"},
 		}, nil
-	}}
-	application := newFixtureRunner(t, fss, resolver)
-	output, err := captureStdout(t, func() error {
-		return application.command().Run(context.Background(), []string{"bistro", "scan", "app", "tools"})
-	})
+	}
+	output, err := captureStdout(t, func() error { return fixture.run("scan", "app", "tools") })
 	require.NoError(t, err)
 	assert.Equal(t, "/workspace/app\n  /lib/owned.so => owner:arm64\n  /lib/unowned.so => <none>\n  [BROKEN] missing.so\n/workspace/tools/static\n", output)
-	assert.Equal(t, 1, resolver.loads)
+	assert.Equal(t, 1, fixture.query.Loads)
+	assert.Equal(t, 1, fixture.resolver.Loads)
 }
 
 func TestScanErrorsProduceNoPartialOutput(t *testing.T) {
@@ -277,21 +237,19 @@ func TestScanErrorsProduceNoPartialOutput(t *testing.T) {
 		{name: "dependency failure", args: []string{"static", "dynamic"}, scanErr: failure, errorWant: failure},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fss := fstest.MapFS{
-				"var/lib/dpkg/status": {},
-				"workspace/static":    {Data: (elftest.Fixture{Static: true}).Bytes()},
-				"workspace/dynamic":   {Data: (elftest.Fixture{}).Bytes()},
+			fixture := newAppFixture(t)
+			fixture.input.DI.FS = fstest.MapFS{
+				"workspace/static":  {Data: (elftest.Fixture{Static: true}).Bytes()},
+				"workspace/dynamic": {Data: (elftest.Fixture{}).Bytes()},
 			}
-			resolver := &fixtureResolver{t: t, listObjects: func(path rootfs.Path) ([]*ldd.Library, error) {
-				if path == rootfs.MustPath("/workspace/static") {
+			fixture.query.LookUpFunc = func(string) (*dpkg.Package, error) { return nil, nil }
+			fixture.resolver.ListObjectsFunc = func(name rootfs.Path) ([]*ldd.Library, error) {
+				if name == rootfs.MustPath("/workspace/static") {
 					return nil, nil
 				}
 				return nil, tc.scanErr
-			}}
-			application := newFixtureRunner(t, fss, resolver)
-			output, err := captureStdout(t, func() error {
-				return application.command().Run(context.Background(), append([]string{"bistro", "scan"}, tc.args...))
-			})
+			}
+			output, err := captureStdout(t, func() error { return fixture.run(append([]string{"scan"}, tc.args...)...) })
 			require.ErrorIs(t, err, tc.errorWant)
 			assert.Empty(t, output)
 		})
@@ -299,11 +257,10 @@ func TestScanErrorsProduceNoPartialOutput(t *testing.T) {
 }
 
 func TestBundleInputFlags(t *testing.T) {
-	dir, err := filepath.EvalSymlinks(t.TempDir())
-	require.NoError(t, err)
+	fixture := newAppFixture(t)
+	fixture.input.Cwd = t.TempDir()
 	executable := (elftest.Fixture{Static: true}).Bytes()
-	fss := fstest.MapFS{
-		"var/lib/dpkg/status":               {Data: []byte("Package: alpha\nArchitecture: all\nStatus: install ok installed\n\nPackage: beta\nArchitecture: arm64\nMulti-Arch: same\nStatus: install ok installed\n")},
+	fixture.input.DI.FS = fstest.MapFS{
 		"var/lib/dpkg/info/alpha.list":      {Data: []byte("/workspace/share/alpha.txt\n")},
 		"var/lib/dpkg/info/beta:arm64.list": {Data: []byte("/workspace/share/beta.txt\n")},
 		"workspace/share/alpha.txt":         {Data: []byte("alpha content")},
@@ -312,41 +269,38 @@ func TestBundleInputFlags(t *testing.T) {
 		"workspace/scan-one/app":            {Data: (elftest.Fixture{}).Bytes()},
 		"workspace/scan-two":                {Data: (elftest.Fixture{}).Bytes()},
 	}
-	var scanned []rootfs.Path
-	resolver := &fixtureResolver{t: t, listObjects: func(path rootfs.Path) ([]*ldd.Library, error) { scanned = append(scanned, path); return nil, nil }}
-	application := newFixtureRunner(t, fss, resolver)
-	// Resolve the output relative to cwd; inputs remain in the virtual workspace.
-	application.cwd = dir
-	err = application.command().Run(context.Background(), []string{
-		"bistro", "bundle", "--out", "bundle.tar",
-		"--scan", "/workspace/scan-one", "--scan", "/workspace/scan-two",
-		"--package", "alpha", "--package", "beta:arm64", "/workspace/bin/app",
-	})
+	packages, err := dpkg.ParseStatus("Package: alpha\nArchitecture: all\nStatus: install ok installed\n\nPackage: beta\nArchitecture: arm64\nMulti-Arch: same\nStatus: install ok installed\n")
 	require.NoError(t, err)
-	assert.Equal(t, rootfs.MustPaths("/workspace/bin/app", "/workspace/scan-one/app", "/workspace/scan-two"), scanned)
-	assert.Equal(t, 1, resolver.loads)
-	data, err := os.ReadFile(filepath.Join(dir, "bundle.tar"))
-	require.NoError(t, err)
-	entries := map[string][]byte{}
-	reader := tar.NewReader(bytes.NewReader(data))
-	for {
-		header, err := reader.Next()
-		if err == io.EOF {
-			break
+	require.Len(t, packages, 2)
+	var requested []string
+	fixture.query.GetFunc = func(name string) (*dpkg.Package, error) {
+		requested = append(requested, name)
+		for _, pkg := range packages {
+			if pkg.NameWithArch() == name {
+				return pkg, nil
+			}
 		}
-		require.NoError(t, err)
-		if header.Typeflag != tar.TypeReg {
-			continue
-		}
-		body, err := io.ReadAll(reader)
-		require.NoError(t, err)
-		require.NotContains(t, entries, header.Name)
-		entries[header.Name] = body
+		t.Fatalf("unexpected package: %s", name)
+		return nil, nil
 	}
+	fixture.query.LookUpFunc = func(string) (*dpkg.Package, error) { return nil, nil }
+	var scanned []rootfs.Path
+	fixture.resolver.ListObjectsFunc = func(name rootfs.Path) ([]*ldd.Library, error) {
+		scanned = append(scanned, name)
+		return nil, nil
+	}
+	require.NoError(t, fixture.run("bundle", "--out", "bundle.tar",
+		"--scan", "/workspace/scan-one", "--scan", "/workspace/scan-two",
+		"--package", "alpha", "--package", "beta:arm64", "/workspace/bin/app"))
+	assert.Equal(t, []string{"alpha", "beta:arm64"}, requested)
+	assert.Equal(t, rootfs.MustPaths("/workspace/bin/app", "/workspace/scan-one/app", "/workspace/scan-two"), scanned)
+	assert.Equal(t, 1, fixture.query.Loads)
+	assert.Equal(t, 1, fixture.resolver.Loads)
+	entries := readArchiveFiles(t, filepath.Join(fixture.input.Cwd, "bundle.tar"))
 	assert.Len(t, entries, 7)
-	assert.Equal(t, executable, entries["workspace/bin/app"])
-	assert.Equal(t, []byte("alpha content"), entries["workspace/share/alpha.txt"])
-	assert.Equal(t, []byte("beta content"), entries["workspace/share/beta.txt"])
+	assert.Equal(t, string(executable), entries["workspace/bin/app"])
+	assert.Equal(t, "alpha content", entries["workspace/share/alpha.txt"])
+	assert.Equal(t, "beta content", entries["workspace/share/beta.txt"])
 	for _, name := range []string{"alpha", "beta"} {
 		assert.Contains(t, entries, "var/lib/dpkg/status.d/"+name)
 		assert.Contains(t, entries, "var/lib/dpkg/status.d/"+name+".md5sums")

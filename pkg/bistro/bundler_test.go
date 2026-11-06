@@ -10,6 +10,7 @@ import (
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/internal/elftest"
+	"github.com/loilo-inc/bistro/pkg/internal/teststub"
 	"github.com/loilo-inc/bistro/pkg/ldd"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/assert"
@@ -27,14 +28,14 @@ func TestBundlerMergesInputs(t *testing.T) {
 	writeRootFSFile(t, unowned, "unowned library", 0644)
 	pkg := testPackage(t, "library:arm64", "", "", dpkg.StatusInstalled)
 	other := testPackage(t, "other:arm64", "", "", dpkg.StatusInstalled)
-	d := packageFilesStub(t, []*dpkg.Package{pkg, other}, map[string][]string{pkg.NameWithArch(): {owned}})
+	d := packageFilesFixture(t, []*dpkg.Package{pkg, other}, map[string][]string{pkg.NameWithArch(): {owned}})
 	var requested []string
-	get := d.get
-	d.get = func(name string) (*dpkg.Package, error) {
+	get := d.query.GetFunc
+	d.query.GetFunc = func(name string) (*dpkg.Package, error) {
 		requested = append(requested, name)
 		return get(name)
 	}
-	b := NewBundler(DI{FS: testFS(d), Query: d})
+	b := NewBundler(DI{FS: d.fs, Query: d.query})
 	var scanned []string
 	b.scanner = stubScanner(func(path string) ([]*ElfDependency, error) {
 		scanned = append(scanned, path)
@@ -67,7 +68,7 @@ func TestBundlerInterpreterWithoutDynamicSegment(t *testing.T) {
 			app, loader := filepath.Join(dir, "app"), filepath.Join(dir, "loader")
 			elftest.Write(t, app, elftest.Fixture{Type: typ, Static: true, Interp: loader})
 			elftest.Write(t, loader, elftest.Fixture{Static: true})
-			di := DI{FS: testFS(nil), Query: unownedFilesQuery()}
+			di := DI{FS: os.DirFS("/"), Query: unownedFilesQuery(t)}
 			di.Ldd = ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: di.FS})
 			deps, err := NewScanner(di).Scan(rootfs.MustPath(app))
 			require.NoError(t, err)
@@ -92,9 +93,9 @@ func TestBundlerPackageOnly(t *testing.T) {
 	file := filepath.Join(dir, "font.ttf")
 	writeRootFSFile(t, file, "font data", 0644)
 	pkg := testPackage(t, "fonts", "", "", dpkg.StatusInstalled)
-	d := packageFilesStub(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {file}})
+	d := packageFilesFixture(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {file}})
 	out := filepath.Join(dir, "bundle.tar")
-	require.NoError(t, NewBundler(DI{FS: testFS(d), Query: d}).Bundle(BundleInput{Out: out, Packages: []string{"fonts"}}))
+	require.NoError(t, NewBundler(DI{FS: d.fs, Query: d.query}).Bundle(BundleInput{Out: out, Packages: []string{"fonts"}}))
 	assert.Equal(t, "font data", readBundleTar(t, out)[rootFSArchiveName(file)].body)
 }
 
@@ -109,9 +110,8 @@ func TestBundlerWithUnselectedMultiarchPackages(t *testing.T) {
 	file := filepath.Join(dir, "font.ttf")
 	writeRootFSFile(t, file, "font data", 0644)
 	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "info/fonts.list"), []byte(file+"\n"), 0644))
-	q := testQuery(baseDir)
-	require.NoError(t, q.Load())
-	b := NewBundler(DI{FS: testFS(q), Query: q})
+	q := newPackageDBFixture(t, baseDir)
+	b := NewBundler(DI{FS: q.fs, Query: q.query})
 	out := filepath.Join(dir, "bundle.tar")
 	require.NoError(t, b.Bundle(BundleInput{Out: out, Packages: []string{"fonts"}}))
 	entries := readBundleTar(t, out)
@@ -146,15 +146,16 @@ func TestBundlerCollectsTargetPackage(t *testing.T) {
 					require.NoError(t, os.Symlink("program", target))
 				}
 				pkg := testPackage(t, "app", "", "", dpkg.StatusInstalled)
-				d := packageFilesStub(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {program, data}})
+				d := packageFilesFixture(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {program, data}})
 				traces := 0
-				l := stubLdd(func(path string) ([]*ldd.Library, error) {
+				l := teststub.NewResolver(t)
+				l.ListObjectsFunc = func(path rootfs.Path) ([]*ldd.Library, error) {
 					traces++
-					assert.Equal(t, target, path)
+					assert.Equal(t, target, path.Abs())
 					return nil, nil
-				})
+				}
 				out := filepath.Join(dir, "bundle.tar")
-				require.NoError(t, NewBundler(DI{FS: testFS(d), Query: d, Ldd: l}).Bundle(BundleInput{Out: out, Files: rootfs.MustPaths(target)}))
+				require.NoError(t, NewBundler(DI{FS: d.fs, Query: d.query, Ldd: l}).Bundle(BundleInput{Out: out, Files: rootfs.MustPaths(target)}))
 				entries := readBundleTar(t, out)
 				assert.Contains(t, entries, rootFSArchiveName(program))
 				assert.Equal(t, "application data", entries[rootFSArchiveName(data)].body)
@@ -174,7 +175,7 @@ func TestBundlerScanOnly(t *testing.T) {
 	file := filepath.Join(dir, "static")
 	writeTestELF(t, file, elf.ET_EXEC, false)
 	out := filepath.Join(dir, "bundle.tar")
-	require.NoError(t, NewBundler(DI{FS: testFS(nil), Query: unownedFilesQuery(), Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: testFS(nil)})}).Bundle(BundleInput{Out: out, Scans: rootfs.MustPaths(file)}))
+	require.NoError(t, NewBundler(DI{FS: os.DirFS("/"), Query: unownedFilesQuery(t), Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: os.DirFS("/")})}).Bundle(BundleInput{Out: out, Scans: rootfs.MustPaths(file)}))
 	assert.Empty(t, readBundleTar(t, out), "a scan contributes dependencies, not its target")
 }
 
@@ -187,9 +188,9 @@ func TestBundlerScansELFAndCollectsOwningPackages(t *testing.T) {
 	writeTestELF(t, extension, elf.ET_DYN, false, "libfoo.so")
 	writeRootFSFile(t, library, "runtime library", 0644)
 	pkg := testPackage(t, "libfoo:arm64", "", "", dpkg.StatusInstalled)
-	d := packageFilesStub(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {library}})
+	d := packageFilesFixture(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {library}})
 	lookups, traces := 0, 0
-	d.lookup = func(path string) (*dpkg.Package, error) {
+	d.query.LookUpFunc = func(path string) (*dpkg.Package, error) {
 		lookups++
 		if path != library {
 			assert.Contains(t, []string{program, extension}, path)
@@ -197,13 +198,14 @@ func TestBundlerScansELFAndCollectsOwningPackages(t *testing.T) {
 		}
 		return pkg, nil
 	}
-	l := stubLdd(func(path string) ([]*ldd.Library, error) {
+	l := teststub.NewResolver(t)
+	l.ListObjectsFunc = func(path rootfs.Path) ([]*ldd.Library, error) {
 		traces++
-		assert.Contains(t, []string{program, extension}, path)
+		assert.Contains(t, []string{program, extension}, path.Abs())
 		return []*ldd.Library{{Name: "libfoo.so", Path: rootfs.MustPath(library)}}, nil
-	})
+	}
 	out := filepath.Join(dir, "bundle.tar")
-	require.NoError(t, NewBundler(DI{FS: testFS(d), Query: d, Ldd: l}).Bundle(BundleInput{
+	require.NoError(t, NewBundler(DI{FS: d.fs, Query: d.query, Ldd: l}).Bundle(BundleInput{
 		Out: out, Files: rootfs.MustPaths(program), Scans: rootfs.MustPaths(extension, program),
 	}))
 	entries := readBundleTar(t, out)
@@ -223,8 +225,8 @@ func TestBundlerFailures(t *testing.T) {
 			out := filepath.Join(dir, "bundle.tar")
 			writeRootFSFile(t, out, "original", 0644)
 			failure := errors.New("external command failed")
-			d := packageFilesStub(t, nil, nil)
-			b := NewBundler(DI{FS: testFS(d), Query: d, Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: testFS(d)})})
+			d := packageFilesFixture(t, nil, nil)
+			b := NewBundler(DI{FS: d.fs, Query: d.query, Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: d.fs})})
 			input := BundleInput{Out: out}
 			b.scanner = stubScanner(func(path string) ([]*ElfDependency, error) {
 				switch stage {
@@ -249,16 +251,14 @@ func TestBundlerFailures(t *testing.T) {
 				want = failure.Error()
 			case "packages":
 				input.Packages = []string{"pkg"}
-				d.get = func(string) (*dpkg.Package, error) { return nil, failure }
-				b.Query = d
+				d.query.GetFunc = func(string) (*dpkg.Package, error) { return nil, failure }
 				want = failure.Error()
 			case "broken library":
 				input.Files = rootfs.MustPaths("app")
 				want = "app => [libmissing.so]"
 			case "uninstalled explicit package":
 				input.Packages = []string{"broken"}
-				d.get = func(string) (*dpkg.Package, error) { return testPackage(t, "broken", "", "", "config-files"), nil }
-				b.Query = d
+				d.query.GetFunc = func(string) (*dpkg.Package, error) { return testPackage(t, "broken", "", "", "config-files"), nil }
 				want = "packages are not installed: broken"
 			case "uninstalled dependency", "uninstalled target package":
 				input.Scans = rootfs.MustPaths("app")
@@ -287,7 +287,7 @@ func TestBundlerFailures(t *testing.T) {
 func TestBundlerReuseRefreshesScanner(t *testing.T) {
 	dir := rootFSTempDir(t)
 	file := filepath.Join(dir, "program")
-	b := NewBundler(DI{FS: testFS(nil), Query: unownedFilesQuery(), Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: testFS(nil)})})
+	b := NewBundler(DI{FS: os.DirFS("/"), Query: unownedFilesQuery(t), Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: os.DirFS("/")})})
 	for i, typ := range []elf.Type{elf.ET_REL, elf.ET_EXEC} {
 		writeTestELF(t, file, typ, false)
 		out := filepath.Join(dir, "bundle.tar")
@@ -328,7 +328,7 @@ func TestBundlerCopyDirectory(t *testing.T) {
 				source = "tree"
 			}
 			out := filepath.Join(dir, "bundle.tar")
-			require.NoError(t, NewBundler(DI{FS: testFS(nil)}).Bundle(BundleInput{Out: out, Copies: []rootfs.Path{rootfs.MustPath(dir).Resolve(source)}}))
+			require.NoError(t, NewBundler(DI{FS: os.DirFS("/")}).Bundle(BundleInput{Out: out, Copies: []rootfs.Path{rootfs.MustPath(dir).Resolve(source)}}))
 			entries := readBundleTar(t, out)
 			for _, path := range []string{tree, filepath.Dir(file), empty} {
 				require.Contains(t, entries, rootFSArchiveName(path))
@@ -360,7 +360,7 @@ func TestBundlerCopySymlinks(t *testing.T) {
 		require.NoError(t, os.Symlink(target, filepath.Join(tree, name)))
 	}
 	out := filepath.Join(dir, "bundle.tar")
-	require.NoError(t, NewBundler(DI{FS: testFS(nil)}).Bundle(BundleInput{Out: out, Copies: rootfs.MustPaths(tree)}))
+	require.NoError(t, NewBundler(DI{FS: os.DirFS("/")}).Bundle(BundleInput{Out: out, Copies: rootfs.MustPaths(tree)}))
 	entries := readBundleTar(t, out)
 	for name, target := range links {
 		key := rootFSArchiveName(filepath.Join(tree, name))
@@ -383,13 +383,14 @@ func TestBundlerCopyMergesAndDeduplicates(t *testing.T) {
 	writeTestELF(t, file, elf.ET_EXEC, false)
 	writeTestELF(t, copiedELF, elf.ET_DYN, false, "not-installed.so")
 	pkg := testPackage(t, "example:arm64", "", "", dpkg.StatusInstalled)
-	d := packageFilesStub(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {file}})
+	d := packageFilesFixture(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {file}})
 	out := filepath.Join(dir, "bundle.tar")
-	l := stubLdd(func(path string) ([]*ldd.Library, error) {
-		require.Equal(t, file, path, "copied ELF files must not be scanned")
+	l := teststub.NewResolver(t)
+	l.ListObjectsFunc = func(path rootfs.Path) ([]*ldd.Library, error) {
+		require.Equal(t, file, path.Abs(), "copied ELF files must not be scanned")
 		return nil, nil
-	})
-	require.NoError(t, NewBundler(DI{FS: testFS(d), Query: d, Ldd: l}).Bundle(BundleInput{
+	}
+	require.NoError(t, NewBundler(DI{FS: d.fs, Query: d.query, Ldd: l}).Bundle(BundleInput{
 		Out: out, Files: rootfs.MustPaths(file), Scans: rootfs.MustPaths(file), Packages: []string{pkg.NameWithArch()},
 		Copies: rootfs.MustPath(dir).SplitList("tree:tree/program:tree:" + copiedELF),
 	}))
@@ -418,7 +419,7 @@ func TestBundlerCopyFailureAndReuse(t *testing.T) {
 				require.NoError(t, os.Symlink("missing", bad))
 				bad = filepath.Dir(bad)
 			}
-			b := NewBundler(DI{FS: testFS(nil)})
+			b := NewBundler(DI{FS: os.DirFS("/")})
 			err := b.Bundle(BundleInput{Out: out, Copies: rootfs.MustPaths(good, bad)})
 			require.ErrorIs(t, err, os.ErrNotExist)
 			original, err := os.ReadFile(out)
