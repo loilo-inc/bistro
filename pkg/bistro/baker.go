@@ -3,7 +3,6 @@ package bistro
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
@@ -24,7 +23,7 @@ func NewBaker(di DI) Baker {
 }
 
 type BakeInput struct {
-	Out      string
+	Out      rootfs.Path
 	DpkgList []*dpkg.Package
 	Files    []rootfs.Path
 	Excludes rootfs.PathSet
@@ -40,7 +39,8 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 		}
 		names[pkg.Name()] = pkg.NameWithArch()
 	}
-	tmpFile, err := os.CreateTemp(filepath.Dir(input.Out), "rootfs")
+	outDir := input.Out.Dir()
+	tmpFile, err := os.CreateTemp(outDir.Abs(), "rootfs")
 	if err != nil {
 		return err
 	}
@@ -50,7 +50,8 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 			os.Remove(tmpFile.Name())
 		}
 	}()
-
+	tmpPath := rootfs.MustPath(tmpFile.Name())
+	input.Excludes.Add(input.Out, tmpPath)
 	archiver := rootfs.NewArchiver(b.FS, tmpFile)
 	archiver.SetExcludes(input.Excludes)
 
@@ -70,7 +71,7 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 	if err := tmpFile.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpFile.Name(), input.Out); err != nil {
+	if err := os.Rename(tmpPath.Abs(), input.Out.Abs()); err != nil {
 		return err
 	}
 	return nil

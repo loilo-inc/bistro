@@ -10,7 +10,7 @@ import (
 )
 
 type BundleInput struct {
-	Out          string
+	Out          rootfs.Path
 	Files        []rootfs.Path
 	Packages     []string
 	Excludes     []rootfs.Path

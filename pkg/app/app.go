@@ -120,7 +120,7 @@ func (c *app) command() *cli.Command {
 						return err
 					}
 					return c.bundle(bistro.BundleInput{
-						Out:          c.absPath(cmd.String("out")),
+						Out:          rootfs.MustPath(c.absPath(cmd.String("out"))),
 						Files:        c.rootfsPaths(cmd.Args().Slice()),
 						Packages:     cmd.StringSlice("package"),
 						Excludes:     c.rootfsPaths(cmd.StringSlice("exclude")),
