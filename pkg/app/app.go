@@ -138,9 +138,10 @@ func (c *app) Run(ctx context.Context, args []string) error {
 
 func (c *app) scan(paths []rootfs.Path, excludes []rootfs.Path) ([]*bistro.ElfDependency, error) {
 	scanner := bistro.NewScanner(c.DI)
+	scanner.SetExcludes(rootfs.NewPathSet(excludes))
 	var elfDeps []*bistro.ElfDependency
 	for _, path := range paths {
-		deps, err := scanner.Scan(path, excludes)
+		deps, err := scanner.Scan(path)
 		if err != nil {
 			return nil, err
 		}
@@ -197,14 +198,9 @@ func (c *app) scanList(paths []rootfs.Path, excludes []rootfs.Path, flat bool) e
 }
 
 func (c *app) scanTree(paths []rootfs.Path, excludes []rootfs.Path) error {
-	scanner := bistro.NewScanner(c.DI)
-	var elfDeps []*bistro.ElfDependency
-	for _, path := range paths {
-		deps, err := scanner.Scan(path, excludes)
-		if err != nil {
-			return err
-		}
-		elfDeps = append(elfDeps, deps...)
+	elfDeps, err := c.scan(paths, excludes)
+	if err != nil {
+		return err
 	}
 	for _, elfDep := range elfDeps {
 		c.printf("%s\n", elfDep.ElfFile.Path)

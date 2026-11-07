@@ -29,6 +29,7 @@ type bundler struct {
 	scanner         Scanner
 	baker           Baker
 	packages        []*dpkg.Package
+	excludes        rootfs.PathSet
 	files           []rootfs.Path
 	missingPackages []string
 	brokenDeps      []*ElfDependency
@@ -36,40 +37,38 @@ type bundler struct {
 }
 
 func Bundle(di DI, input BundleInput) error {
-	excludes, err := resolveTargetPaths(input.Excludes, di.FS)
-	if err != nil {
-		return err
-	}
-	excludeScans, err := resolveTargetPaths(input.ExcludeScans, di.FS)
-	if err != nil {
-		return err
-	}
-	bundleInput := input
-	bundleInput.Excludes = excludes
-	bundleInput.ExcludeScans = excludeScans
+	excludes := rootfs.NewPathSet(input.Excludes)
+	excludeScans := rootfs.NewPathSet(slices.Concat(input.ExcludeScans, input.Excludes))
+	scanner := NewScanner(di)
+	scanner.SetExcludes(excludeScans)
+	baker := NewBaker(di)
 	b := &bundler{
 		DI:          di,
-		BundleInput: bundleInput,
-		scanner:     NewScanner(di),
-		baker:       NewBaker(di),
+		BundleInput: input,
+		scanner:     scanner,
+		baker:       baker,
+		excludes:    excludes,
 	}
 	return b.bundle()
 }
 
 func (b *bundler) bundle() error {
-	excludeScans := slices.Concat(b.ExcludeScans, b.Excludes)
 	for _, file := range b.Files {
-		deps, err := b.scanner.Scan(file, excludeScans)
+		deps, err := b.scanner.Scan(file)
 		if err != nil {
 			return err
 		}
 		if err := b.addCopyFile(file); err != nil {
 			return err
 		}
-		b.addDependency(deps)
+		if err := b.addDependency(deps); err != nil {
+			return err
+		}
 		// Add dependent files to the list of files for bundling target
 		for _, dep := range deps {
-			b.addFile(dep.ElfFile.Path)
+			if err := b.addFile(dep.ElfFile.Path); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -95,12 +94,14 @@ func (b *bundler) bundle() error {
 		Out:      b.Out,
 		DpkgList: b.packages,
 		Files:    b.files,
-		Excludes: b.Excludes,
+		Excludes: b.excludes,
 	})
 }
 
 func (b *bundler) addCopyFile(file rootfs.Path) error {
-	if file.IsExcluded(b.Excludes) {
+	if matched, err := b.excludes.LMatches(b.FS, file); err != nil {
+		return err
+	} else if matched {
 		return nil
 	}
 	lstat, err := fs.Lstat(b.FS, file.Path())
@@ -108,7 +109,9 @@ func (b *bundler) addCopyFile(file rootfs.Path) error {
 		return err
 	}
 
-	b.addFile(file)
+	if err := b.addFile(file); err != nil {
+		return err
+	}
 
 	if !lstat.IsDir() {
 		return nil
@@ -126,7 +129,7 @@ func (b *bundler) addCopyFile(file rootfs.Path) error {
 	return nil
 }
 
-func (b *bundler) addDependency(deps []*ElfDependency) {
+func (b *bundler) addDependency(deps []*ElfDependency) error {
 	for _, dep := range deps {
 		if len(dep.BrokenLibs) > 0 {
 			b.brokenDeps = append(b.brokenDeps, dep)
@@ -135,12 +138,15 @@ func (b *bundler) addDependency(deps []*ElfDependency) {
 			b.addPackage(dep.Package)
 		}
 		for _, exeDep := range dep.Dependencies {
-			b.addFile(exeDep.Library.Path)
+			if err := b.addFile(exeDep.Library.Path); err != nil {
+				return err
+			}
 			if exeDep.Package != nil {
 				b.addPackage(exeDep.Package)
 			}
 		}
 	}
+	return nil
 }
 
 func (b *bundler) addPackage(t *dpkg.Package) {
@@ -153,9 +159,12 @@ func (b *bundler) addPackage(t *dpkg.Package) {
 	}
 }
 
-func (b *bundler) addFile(file rootfs.Path) {
-	if file.IsExcluded(b.Excludes) {
-		return
+func (b *bundler) addFile(file rootfs.Path) error {
+	if matched, err := b.excludes.LMatches(b.FS, file); err != nil {
+		return err
+	} else if matched {
+		return nil
 	}
 	b.files = append(b.files, file)
+	return nil
 }

@@ -6,65 +6,78 @@ import (
 	"strings"
 )
 
-type excluder struct {
-	excludes *pathSet
-	resolved bool
-	symlink  *symlinkResolver
+func NewPathSet(list []Path) PathSet {
+	result := PathSet{origPaths: list}
+	return result
 }
 
-func NewExcluder(fsys fs.FS, excludes []Path) (*excluder, error) {
-	symlink := newSymlinkResolver(fsys)
-	ps, err := newPathSet(excludes, symlink)
-	if err != nil {
-		return nil, err
+type PathSet struct {
+	origPaths     []Path
+	resolvedPaths []Path
+	resolved      bool
+}
+
+func pathMatches(p Path, list []Path) bool {
+	for _, prefix := range list {
+		excluded := prefix.Abs()
+		if p.Abs() == excluded ||
+			strings.HasPrefix(p.Abs(), strings.TrimSuffix(excluded, "/")+"/") {
+			return true
+		}
 	}
-	return &excluder{
-		excludes: ps,
-		resolved: false,
-		symlink:  symlink,
-	}, nil
+	return false
 }
 
-func (e *excluder) IsExcluded(target Path) bool {
-	ps, err := newPathSet([]Path{target}, e.symlink)
-	if err != nil {
-		return false
-	}
-	return ps.isExcluded(e.excludes)
-}
-
-func newPathSet(list []Path, sym *symlinkResolver) (*pathSet, error) {
-	var result pathSet
-	for _, p := range list {
+func (ps *PathSet) resolveLinks(fss fs.FS) error {
+	var result []Path
+	for _, p := range ps.origPaths {
 		dir := p.Dir()
-		realDir, err := sym.Resolve(dir)
+		realDir, err := dir.RealPath(fss)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			break
 		case err != nil:
-			return nil, err
+			return err
 		case realDir.Abs() != dir.Abs():
-			result.paths = append(result.paths, realDir.Join(p.Base()))
+			result = append(result, realDir.Join(p.Base()))
 		}
-		result.paths = append(result.paths, p)
+		result = append(result, p)
 	}
-	return &result, nil
+	ps.resolvedPaths = result
+	ps.resolved = true
+	return nil
 }
 
-type pathSet struct {
-	paths []Path
-}
-
-func (ps *pathSet) isExcluded(targets *pathSet) bool {
-	for _, p := range ps.paths {
-		target := p.Abs()
-		for _, prefix := range targets.paths {
-			excluded := prefix.Abs()
-			if target == excluded ||
-				strings.HasPrefix(target, strings.TrimSuffix(excluded, "/")+"/") {
-				return true
-			}
+func (ps *PathSet) LMatches(fss fs.FS, p Path) (bool, error) {
+	if pathMatches(p, ps.origPaths) {
+		return true, nil
+	}
+	if !ps.resolved {
+		if err := ps.resolveLinks(fss); err != nil {
+			return false, err
 		}
 	}
-	return false
+	real, err := p.RealPath(fss)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		break
+	case err != nil:
+		return false, err
+	default:
+		return pathMatches(*real, ps.resolvedPaths), nil
+	}
+	return false, nil
+}
+
+func (ps *PathSet) Clone() PathSet {
+	return PathSet{
+		origPaths:     append([]Path(nil), ps.origPaths...),
+		resolvedPaths: append([]Path(nil), ps.resolvedPaths...),
+		resolved:      ps.resolved,
+	}
+}
+
+func (ps *PathSet) Add(p ...Path) {
+	ps.origPaths = append(ps.origPaths, p...)
+	ps.resolved = false
 }

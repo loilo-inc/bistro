@@ -11,15 +11,22 @@ import (
 	"github.com/loilo-inc/bistro/pkg/util"
 )
 
+type SymlinkResolver interface {
+	Resolve(path Path) (*Path, error)
+	Visit(path Path, onStart func(file Path) (bool, error), onVisit func(file Path, link string, stat fs.FileInfo) error) error
+}
+
 type symlinkResolver struct {
 	resolving util.Map[resolvingState, bool]
 	visited   util.Map[Path, bool]
 	fs        fs.FS
 	onVisit   func(file Path, link string, stat fs.FileInfo) error
-	onStart   func(file Path) bool
+	onStart   func(file Path) (bool, error)
 }
 
-func newSymlinkResolver(fs fs.FS) *symlinkResolver {
+var _ SymlinkResolver = (*symlinkResolver)(nil)
+
+func NewSymlinkResolver(fs fs.FS) SymlinkResolver {
 	return &symlinkResolver{fs: fs}
 }
 
@@ -39,8 +46,14 @@ func (r *symlinkResolver) Resolve(path Path) (*Path, error) {
 }
 
 func (r *symlinkResolver) resolve(path Path) (*pathResolution, error) {
-	if r.onStart != nil && !r.onStart(path) {
-		return nil, errVisitCanceld
+	if r.onStart != nil {
+		ok, err := r.onStart(path)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, errVisitCanceld
+		}
 	}
 	var paths []Path
 	var p Path = path
@@ -66,7 +79,7 @@ func (r *symlinkResolver) resolve(path Path) (*pathResolution, error) {
 
 func (r *symlinkResolver) Visit(
 	path Path,
-	onStart func(file Path) bool,
+	onStart func(file Path) (bool, error),
 	onVisit func(file Path, link string, stat fs.FileInfo) error,
 ) error {
 	r.onStart = onStart

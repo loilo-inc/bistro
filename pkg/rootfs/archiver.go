@@ -16,12 +16,14 @@ type Archiver interface {
 	Add(path Path, content []byte, mode fs.FileMode) error
 	// Close finalizes the root filesystem, writing any remaining data.
 	Close() error
+	// SetExcludes sets the paths to be excluded from the root filesystem.
+	SetExcludes(excludes PathSet)
 }
 
 type archiver struct {
-	symlink  *symlinkResolver
+	symlink  SymlinkResolver
 	copied   util.Map[Path, bool]
-	excluder *excluder
+	excludes PathSet
 	tw       *tar.Writer
 	fs       fs.FS
 }
@@ -33,18 +35,17 @@ type resolvingState struct {
 
 var _ Archiver = &archiver{}
 
-type ArchiverOptions struct {
-	Excludes []Path
-}
-
-func NewArchiver(fs fs.FS, out io.Writer, opts ArchiverOptions) Archiver {
+func NewArchiver(fs fs.FS, out io.Writer) Archiver {
 	r := &archiver{
-		tw:       tar.NewWriter(out),
-		fs:       fs,
-		symlink:  newSymlinkResolver(fs),
-		excludes: opts.Excludes,
+		tw:      tar.NewWriter(out),
+		fs:      fs,
+		symlink: NewSymlinkResolver(fs),
 	}
 	return r
+}
+
+func (r *archiver) SetExcludes(excludes PathSet) {
+	r.excludes = excludes
 }
 
 func (r *archiver) Copy(path Path) error {
@@ -52,7 +53,9 @@ func (r *archiver) Copy(path Path) error {
 }
 
 func (r *archiver) Add(path Path, content []byte, mode fs.FileMode) error {
-	if path.IsExcluded(r.excludes) {
+	if skip, err := r.excludes.LMatches(r.fs, path); err != nil {
+		return err
+	} else if skip {
 		return nil
 	}
 	header := &tar.Header{
@@ -72,8 +75,12 @@ func (r *archiver) Close() error {
 	return r.tw.Close()
 }
 
-func (r *archiver) shouldCopyFile(path Path) bool {
-	return !path.IsExcluded(r.excludes)
+func (r *archiver) shouldCopyFile(path Path) (bool, error) {
+	skip, err := r.excludes.LMatches(r.fs, path)
+	if err != nil {
+		return false, err
+	}
+	return !skip, nil
 }
 
 func (r *archiver) copyOne(path Path, link string, lstat fs.FileInfo) (err error) {

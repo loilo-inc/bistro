@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
@@ -28,7 +27,7 @@ type BakeInput struct {
 	Out      string
 	DpkgList []*dpkg.Package
 	Files    []rootfs.Path
-	Excludes []rootfs.Path
+	Excludes rootfs.PathSet
 }
 
 func (b *baker) CreateRootFS(input *BakeInput) (err error) {
@@ -52,23 +51,22 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 		}
 	}()
 
-	rootfs := rootfs.NewArchiver(b.FS, tmpFile, rootfs.ArchiverOptions{
-		Excludes: slices.Concat(input.Excludes, []rootfs.Path{
-			rootfs.MustPath("/proc"),
-			rootfs.MustPath("/sys"),
-		}),
-	})
+	archiver := rootfs.NewArchiver(b.FS, tmpFile)
+	excludes := input.Excludes.Clone()
+	excludes.Add(rootfs.MustPath("/sys"), rootfs.MustPath("/proc"))
+	archiver.SetExcludes(excludes)
+
 	for _, pkg := range input.DpkgList {
-		if err := b.writePackageMetadata(rootfs, pkg, input.Excludes); err != nil {
+		if err := b.writePackageMetadata(archiver, pkg, input.Excludes); err != nil {
 			return err
 		}
 	}
 	for _, file := range input.Files {
-		if err := rootfs.Copy(file); err != nil {
+		if err := archiver.Copy(file); err != nil {
 			return err
 		}
 	}
-	if err := rootfs.Close(); err != nil {
+	if err := archiver.Close(); err != nil {
 		return err
 	}
 	if err := tmpFile.Close(); err != nil {
@@ -87,7 +85,7 @@ const DpkgStatusDir = "/var/lib/dpkg/status.d"
 func (b *baker) writePackageMetadata(
 	rootFS rootfs.Archiver,
 	pkg *dpkg.Package,
-	excludes []rootfs.Path,
+	excludes rootfs.PathSet,
 ) error {
 	if err := rootFS.Add(rootfs.MustPath(DpkgStatusDir).Join(pkg.Name()), []byte(pkg.String()), 0644); err != nil {
 		return err
@@ -105,7 +103,9 @@ func (b *baker) writePackageMetadata(
 	}
 
 	for _, srcPath := range files {
-		if srcPath.IsExcluded(excludes) {
+		if skip, err := excludes.LMatches(b.FS, srcPath); err != nil {
+			return err
+		} else if skip {
 			continue
 		}
 		if err := rootFS.Copy(srcPath); os.IsNotExist(err) {
