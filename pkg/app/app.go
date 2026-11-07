@@ -103,24 +103,16 @@ func (c *app) command() *cli.Command {
 						Required: true,
 					},
 					&cli.StringSliceFlag{
-						Name:  "scan",
-						Usage: "Executable or directories to scan for dependencies.",
-					},
-					&cli.StringSliceFlag{
-						Name:  "exclude-scan",
-						Usage: "Files or directories to exclude from scanning.",
-					},
-					&cli.StringSliceFlag{
 						Name:  "package",
 						Usage: "Packages to include in the root filesystem",
 					},
 					&cli.StringSliceFlag{
-						Name:  "copy",
-						Usage: "Files or directories to copy into the root filesystem.",
+						Name:  "exclude",
+						Usage: "Files or directories to exclude from the root filesystem.",
 					},
 					&cli.StringSliceFlag{
-						Name:  "exclude-copy",
-						Usage: "Files or directories to exclude from copying.",
+						Name:  "exclude-scan",
+						Usage: "Files or directories to exclude from scanning.",
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -128,13 +120,11 @@ func (c *app) command() *cli.Command {
 						return err
 					}
 					return c.bundle(bistro.BundleInput{
-						Out:           c.absPath(cmd.String("out")),
-						Files:         c.rootfsPaths(cmd.Args().Slice()),
-						Scans:         c.rootfsPaths(cmd.StringSlice("scan")),
-						Packages:      cmd.StringSlice("package"),
-						Copies:        c.rootfsPaths(cmd.StringSlice("copy")),
-						ExcludeScans:  c.rootfsPaths(cmd.StringSlice("exclude-scan")),
-						ExcludeCopies: c.rootfsPaths(cmd.StringSlice("exclude-copy")),
+						Out:          c.absPath(cmd.String("out")),
+						Files:        c.rootfsPaths(cmd.Args().Slice()),
+						Packages:     cmd.StringSlice("package"),
+						Excludes:     c.rootfsPaths(cmd.StringSlice("exclude")),
+						ExcludeScans: c.rootfsPaths(cmd.StringSlice("exclude-scan")),
 					})
 				},
 			},
@@ -254,8 +244,7 @@ func (c *app) errorf(format string, args ...any) {
 }
 
 func (c *app) bundle(input bistro.BundleInput) error {
-	bundler := bistro.NewBundler(c.DI)
-	return bundler.Bundle(input)
+	return bistro.Bundle(c.DI, input)
 }
 
 func (c *app) absPath(p string) string {

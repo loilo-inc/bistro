@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
@@ -27,6 +28,7 @@ type BakeInput struct {
 	Out      string
 	DpkgList []*dpkg.Package
 	Files    []rootfs.Path
+	Excludes []rootfs.Path
 }
 
 func (b *baker) CreateRootFS(input *BakeInput) (err error) {
@@ -49,9 +51,15 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 			os.Remove(tmpFile.Name())
 		}
 	}()
-	rootfs := rootfs.NewArchiver(b.FS, tmpFile)
+
+	rootfs := rootfs.NewArchiver(b.FS, tmpFile, rootfs.ArchiverOptions{
+		Excludes: slices.Concat(input.Excludes, []rootfs.Path{
+			rootfs.MustPath("/proc"),
+			rootfs.MustPath("/sys"),
+		}),
+	})
 	for _, pkg := range input.DpkgList {
-		if err := b.writePackageMetadata(rootfs, pkg); err != nil {
+		if err := b.writePackageMetadata(rootfs, pkg, input.Excludes); err != nil {
 			return err
 		}
 	}
@@ -76,7 +84,11 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 // directory to store dpkg status used by distroless
 const DpkgStatusDir = "/var/lib/dpkg/status.d"
 
-func (b *baker) writePackageMetadata(rootFS rootfs.Archiver, pkg *dpkg.Package) error {
+func (b *baker) writePackageMetadata(
+	rootFS rootfs.Archiver,
+	pkg *dpkg.Package,
+	excludes []rootfs.Path,
+) error {
 	if err := rootFS.Add(rootfs.MustPath(DpkgStatusDir).Join(pkg.Name()), []byte(pkg.String()), 0644); err != nil {
 		return err
 	}
@@ -93,6 +105,9 @@ func (b *baker) writePackageMetadata(rootFS rootfs.Archiver, pkg *dpkg.Package) 
 	}
 
 	for _, srcPath := range files {
+		if srcPath.IsExcluded(excludes) {
+			continue
+		}
 		if err := rootFS.Copy(srcPath); os.IsNotExist(err) {
 			b.Logger.Error("File does not exist: %s", srcPath)
 			continue

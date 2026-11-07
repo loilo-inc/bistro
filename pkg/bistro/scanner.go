@@ -9,23 +9,29 @@ import (
 )
 
 type Scanner interface {
-	Scan(origPath rootfs.Path, excludeScans []rootfs.Path) ([]*ElfDependency, error)
+	Scan(fileOrDir rootfs.Path) ([]*ElfDependency, error)
 }
 
 type scanner struct {
 	DI
 	finder    Finder
+	excludes  []rootfs.Path
 	fileCache map[rootfs.Path]*ElfFile
 	depsCache map[rootfs.Path]*ElfDependency
 }
 
 var _ Scanner = &scanner{}
 
-func NewScanner(di DI) Scanner {
+type ScannerInput struct {
+	Excludes []rootfs.Path
+}
+
+func NewScanner(di DI, input ScannerInput) Scanner {
 	finder := NewFinder(di)
 	return &scanner{
 		DI:        di,
 		finder:    finder,
+		excludes:  input.Excludes,
 		fileCache: map[rootfs.Path]*ElfFile{},
 		depsCache: map[rootfs.Path]*ElfDependency{},
 	}
@@ -44,8 +50,8 @@ type ElfDependency struct {
 	BrokenLibs   []string
 }
 
-func (s *scanner) Scan(path rootfs.Path, excludes []rootfs.Path) ([]*ElfDependency, error) {
-	if IsExcluded(path, excludes) {
+func (s *scanner) Scan(path rootfs.Path) ([]*ElfDependency, error) {
+	if path.IsExcluded(excludes) {
 		return nil, nil
 	}
 	stat, err := fs.Stat(s.FS, path.Path())
@@ -53,30 +59,24 @@ func (s *scanner) Scan(path rootfs.Path, excludes []rootfs.Path) ([]*ElfDependen
 		return nil, err
 	}
 	if stat.IsDir() {
-		return s.ScanDir(path, excludes)
+		return s.scanDir(path, excludes)
 	}
-	elfFile, isElf, err := s.handleFile(path)
-	if !isElf {
+	if dep, err := s.scanFile(path); err != nil {
 		return nil, err
-	}
-	dep, err := s.ScanFile(elfFile)
-	if err != nil {
-		return nil, err
-	}
-	if isElf {
+	} else if dep != nil {
 		return []*ElfDependency{dep}, nil
 	}
 	return nil, nil
 }
 
-func (s *scanner) ScanDir(path rootfs.Path, excludes []rootfs.Path) ([]*ElfDependency, error) {
+func (s *scanner) scanDir(path rootfs.Path) ([]*ElfDependency, error) {
 	elfFiles, err := s.findElfFiles(path, excludes)
 	if err != nil {
 		return nil, err
 	}
 	var result []*ElfDependency
 	for _, elfFile := range elfFiles {
-		deps, err := s.ScanFile(elfFile)
+		deps, err := s.scanElfFile(elfFile)
 		if err != nil {
 			return nil, err
 		}
@@ -85,7 +85,22 @@ func (s *scanner) ScanDir(path rootfs.Path, excludes []rootfs.Path) ([]*ElfDepen
 	return result, nil
 }
 
-func (s *scanner) ScanFile(file *ElfFile) (*ElfDependency, error) {
+func (s *scanner) scanFile(path rootfs.Path) (*ElfDependency, error) {
+	elfFile, isElf, err := s.handleFile(path)
+	if !isElf {
+		return nil, err
+	}
+	dep, err := s.scanElfFile(elfFile)
+	if err != nil {
+		return nil, err
+	}
+	if isElf {
+		return dep, nil
+	}
+	return nil, nil
+}
+
+func (s *scanner) scanElfFile(file *ElfFile) (*ElfDependency, error) {
 	if cache, ok := s.depsCache[file.Path]; ok {
 		return cache, nil
 	}
@@ -111,7 +126,7 @@ func (s *scanner) ScanFile(file *ElfFile) (*ElfDependency, error) {
 	return result, nil
 }
 
-func (s *scanner) findElfFiles(dir rootfs.Path, excludes []rootfs.Path) ([]*ElfFile, error) {
+func (s *scanner) findElfFiles(dir rootfs.Path) ([]*ElfFile, error) {
 	ertries, err := fs.ReadDir(s.FS, dir.Path())
 	if err != nil {
 		return nil, err
@@ -119,7 +134,7 @@ func (s *scanner) findElfFiles(dir rootfs.Path, excludes []rootfs.Path) ([]*ElfF
 	var result []*ElfFile
 	for _, entry := range ertries {
 		subPath := dir.Join(entry.Name())
-		if IsExcluded(subPath, excludes) {
+		if subPath.IsExcluded(excludes) {
 			continue
 		}
 		if entry.IsDir() {

@@ -7,11 +7,10 @@ WORKDIR /app
 RUN go mod tidy
 RUN make main VERSION="$VERSION" COMMIT="$COMMIT" DATE="$DATE" && \
     chmod +x main && \
-    mv ./main /usr/local/bin/bistro && \
-    bistro bundle -o bistro.tar /usr/local/bin/bistro && \
-    mkdir rootfs && \
-    tar -xf bistro.tar -C rootfs
+    mv ./main /bin/bistro && \
+    bistro bundle /bin/bistro  -o bistro.tar --package base-files && \
+    mkdir rootfs && tar -xf bistro.tar -C rootfs
 
 FROM scratch
 COPY --from=builder /app/rootfs /
-ENTRYPOINT ["/usr/local/bin/bistro"]
+ENTRYPOINT ["/bin/bistro"]

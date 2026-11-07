@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"io"
 	"io/fs"
-	"regexp"
 	"time"
 
 	"github.com/loilo-inc/bistro/pkg/util"
@@ -20,11 +19,11 @@ type Archiver interface {
 }
 
 type archiver struct {
-	symlink   *symlinkResolver
-	copied    util.Map[Path, bool]
-	spFilePat *regexp.Regexp
-	tw        *tar.Writer
-	fs        fs.FS
+	symlink  *symlinkResolver
+	copied   util.Map[Path, bool]
+	excluder *excluder
+	tw       *tar.Writer
+	fs       fs.FS
 }
 
 type resolvingState struct {
@@ -34,13 +33,18 @@ type resolvingState struct {
 
 var _ Archiver = &archiver{}
 
-func NewArchiver(fs fs.FS, out io.Writer) Archiver {
-	return &archiver{
-		tw:        tar.NewWriter(out),
-		symlink:   newSymlinkResolver(fs),
-		fs:        fs,
-		spFilePat: regexp.MustCompile(`^/(proc|sys)(/|$)`),
+type ArchiverOptions struct {
+	Excludes []Path
+}
+
+func NewArchiver(fs fs.FS, out io.Writer, opts ArchiverOptions) Archiver {
+	r := &archiver{
+		tw:       tar.NewWriter(out),
+		fs:       fs,
+		symlink:  newSymlinkResolver(fs),
+		excludes: opts.Excludes,
 	}
+	return r
 }
 
 func (r *archiver) Copy(path Path) error {
@@ -48,6 +52,9 @@ func (r *archiver) Copy(path Path) error {
 }
 
 func (r *archiver) Add(path Path, content []byte, mode fs.FileMode) error {
+	if path.IsExcluded(r.excludes) {
+		return nil
+	}
 	header := &tar.Header{
 		Name:    path.TarName(),
 		Mode:    int64(mode),
@@ -66,7 +73,7 @@ func (r *archiver) Close() error {
 }
 
 func (r *archiver) shouldCopyFile(path Path) bool {
-	return !r.spFilePat.MatchString(path.Abs())
+	return !path.IsExcluded(r.excludes)
 }
 
 func (r *archiver) copyOne(path Path, link string, lstat fs.FileInfo) (err error) {

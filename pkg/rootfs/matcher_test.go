@@ -1,9 +1,8 @@
-package bistro
+package rootfs
 
 import (
 	"testing"
 
-	"github.com/loilo-inc/bistro/pkg/rootfs"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -26,7 +25,7 @@ func TestIsExcluded(t *testing.T) {
 		{name: "multiple exclusions", target: "/app/cache/tool", excludes: []string{"/other", "/app/cache"}, want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, IsExcluded(rootfs.MustPath(tc.target), rootfs.MustPaths(tc.excludes...)))
+			assert.Equal(t, tc.want, IsExcluded(MustPath(tc.target), MustPaths(tc.excludes...)))
 		})
 	}
 }
