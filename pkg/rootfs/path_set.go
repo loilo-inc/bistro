@@ -28,6 +28,7 @@ func pathMatch(p Path, list []Path) bool {
 	return false
 }
 
+// Resolve resolves the original paths to their real paths using the provided filesystem.
 func (ps *PathSet) Resolve(fss fs.FS) error {
 	for i := ps.resolvedIdx; i < len(ps.origPaths); i++ {
 		p := ps.origPaths[i]
@@ -35,17 +36,19 @@ func (ps *PathSet) Resolve(fss fs.FS) error {
 		realDir, err := dir.RealPath(fss)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
-			break
+			goto next
 		case err != nil:
 			return err
 		case realDir.Abs() != dir.Abs():
 			ps.resolvedPaths = append(ps.resolvedPaths, realDir.Join(p.Base()))
 		}
+	next:
 		ps.resolvedIdx += 1
 	}
 	return nil
 }
 
+// Match checks if the given path matches any of the original or resolved paths in the set.
 func (ps *PathSet) Match(fss fs.FS, p Path) (bool, error) {
 	if pathMatch(p, ps.origPaths) {
 		return true, nil

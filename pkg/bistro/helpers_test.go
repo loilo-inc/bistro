@@ -37,10 +37,10 @@ func unownedFilesQuery(t testing.TB) *teststub.Query {
 	return q
 }
 
-type stubScanner func(string, []rootfs.Path) ([]*ElfDependency, error)
+type stubScanner func(string) ([]*ElfDependency, error)
 
-func (s stubScanner) Scan(path rootfs.Path, excludes []rootfs.Path) ([]*ElfDependency, error) {
-	return s(path.Abs(), excludes)
+func (s stubScanner) Scan(path rootfs.Path) ([]*ElfDependency, error) {
+	return s(path.Abs())
 }
 
 // Generate an aarch64 ELF fixture, independent of the test host's executable
@@ -106,4 +106,11 @@ func readRootFSTar(t *testing.T, data []byte) map[string]rootFSEntry {
 
 func rootFSArchiveName(name string) string {
 	return strings.TrimPrefix(filepath.ToSlash(name), "/")
+}
+
+func (s stubScanner) SetExcludes(rootfs.PathSet) {}
+
+// newTestBundler exposes the scanner seam for failure and dependency fixtures.
+func newTestBundler(di DI) *bundler {
+	return &bundler{DI: di, scanner: NewScanner(di), baker: NewBaker(di)}
 }

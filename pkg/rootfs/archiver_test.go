@@ -8,7 +8,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -229,16 +228,6 @@ func TestArchiverSymlinks(t *testing.T) {
 	}
 }
 
-func TestArchiverSpecialFilePattern(t *testing.T) {
-	pat := NewArchiver(os.DirFS("/"), io.Discard).(*archiver).spFilePat
-	for _, name := range []string{"/proc", "/proc/self/fd/1", "/sys", "/sys/class/net"} {
-		assert.True(t, pat.MatchString(name), name)
-	}
-	for _, name := range []string{"/", "/processes", "/system", "/sysroot/lib", "/usr/proc", "/dev/pts/0"} {
-		assert.False(t, pat.MatchString(name), name)
-	}
-}
-
 func TestArchiverStopsAtSpecialFileSymlinks(t *testing.T) {
 	dir := rootFSTempDir(t)
 	// /proc/self/fd/1 may point to a non-path target such as "pipe:[1]".
@@ -260,7 +249,7 @@ func TestArchiverStopsAtSpecialFileSymlinks(t *testing.T) {
 
 	var out bytes.Buffer
 	root := NewArchiver(os.DirFS("/"), &out).(*archiver)
-	root.spFilePat = regexp.MustCompile("^" + regexp.QuoteMeta(dir) + `/(proc|sys)(/|$)`)
+	root.SetExcludes(NewPathSet(MustPaths(filepath.Join(dir, "proc"), filepath.Join(dir, "sys"))))
 	for _, name := range []string{
 		filepath.Join(dir, "dev", "stdout"),
 		filepath.Join(dir, "dev", "stderr"),
@@ -352,7 +341,7 @@ func TestArchiverSymlinkRootBoundary(t *testing.T) {
 				} else {
 					require.NoError(t, err)
 				}
-				require.Zero(t, root.symlink.resolving.Size(), "link resolution state must be cleared")
+				require.Zero(t, root.symlink.(*symlinkResolver).resolving.Size(), "link resolution state must be cleared")
 			}
 			valid := filepath.Join(dir, "valid")
 			writeRootFSFile(t, valid, "after resolution", 0644)
@@ -425,4 +414,25 @@ func TestArchiverWriteErrors(t *testing.T) {
 		writer.err = want
 		assert.ErrorIs(t, root.Close(), want)
 	})
+}
+
+func TestArchiverExcludesAliasesAndAddedFiles(t *testing.T) {
+	dir := rootFSTempDir(t)
+	real := filepath.Join(dir, "real")
+	omitted := filepath.Join(real, "omitted")
+	alias := filepath.Join(dir, "alias")
+	writeRootFSFile(t, omitted, "omit", 0644)
+	require.NoError(t, os.Symlink("real", alias))
+	link := filepath.Join(dir, "link")
+	require.NoError(t, os.Symlink("real/omitted", link))
+	var out bytes.Buffer
+	a := NewArchiver(os.DirFS("/"), &out)
+	a.SetExcludes(NewPathSet(MustPaths(filepath.Join(alias, "omitted"), "/var/lib/dpkg")))
+	require.NoError(t, a.Copy(MustPath(link)))
+	require.NoError(t, a.Copy(MustPath(omitted)))
+	require.NoError(t, a.Add(MustPath("/var/lib/dpkg/status.d/example"), []byte("metadata"), 0644))
+	require.NoError(t, a.Close())
+	entries := readRootFSTar(t, out.Bytes())
+	require.NotContains(t, entries, rootFSArchiveName(omitted))
+	require.NotContains(t, entries, "var/lib/dpkg/status.d/example")
 }

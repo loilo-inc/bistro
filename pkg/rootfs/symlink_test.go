@@ -99,10 +99,10 @@ func TestRealPathSymlinkLimit(t *testing.T) {
 		fss[fmt.Sprintf("link%d", i)] = &fstest.MapFile{Mode: fs.ModeSymlink | 0777, Data: fmt.Appendf(nil, "link%d", i+1)}
 	}
 	fss["link257"] = &fstest.MapFile{Mode: 0644}
-	resolver := newSymlinkResolver(fss)
+	resolver := NewSymlinkResolver(fss)
 	_, err := resolver.Resolve(MustPath("link0"))
 	require.ErrorContains(t, err, "too many symlinks")
-	require.Zero(t, resolver.resolving.Size())
+	require.Zero(t, resolver.(*symlinkResolver).resolving.Size())
 	resolved, err := resolver.Resolve(MustPath("link257"))
 	require.NoError(t, err)
 	require.Equal(t, MustPath("link257"), *resolved)
@@ -133,7 +133,11 @@ func TestArchiverCopyPropagatesResolutionErrors(t *testing.T) {
 			a := NewArchiver(fss, &out)
 			require.ErrorIs(t, a.Copy(MustPath("alias")), cause)
 			require.NoError(t, a.Close())
-			require.Contains(t, readRootFSTar(t, out.Bytes()), "alias")
+			if cause == fs.ErrNotExist {
+				require.Contains(t, readRootFSTar(t, out.Bytes()), "alias")
+			} else {
+				require.NotContains(t, readRootFSTar(t, out.Bytes()), "alias")
+			}
 		})
 	}
 	t.Run("missing input", func(t *testing.T) {
@@ -150,6 +154,7 @@ func TestArchiverStopsBeforeSpecialTargets(t *testing.T) {
 			fss := fstest.MapFS{"alias": {Mode: fs.ModeSymlink | 0777, Data: []byte(target)}}
 			var out bytes.Buffer
 			a := NewArchiver(fss, &out)
+			a.SetExcludes(NewPathSet(MustPaths("/proc", "/sys")))
 			require.NoError(t, a.Copy(MustPath("alias")))
 			require.NoError(t, a.Close())
 			entries := readRootFSTar(t, out.Bytes())
