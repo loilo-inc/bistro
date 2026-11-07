@@ -53,7 +53,7 @@ func (r *archiver) Copy(path Path) error {
 }
 
 func (r *archiver) Add(path Path, content []byte, mode fs.FileMode) error {
-	if skip, err := r.excludes.LMatches(r.fs, path); err != nil {
+	if skip, err := r.excludes.Match(r.fs, path); err != nil {
 		return err
 	} else if skip {
 		return nil
@@ -76,7 +76,7 @@ func (r *archiver) Close() error {
 }
 
 func (r *archiver) shouldCopyFile(path Path) (bool, error) {
-	skip, err := r.excludes.LMatches(r.fs, path)
+	skip, err := r.excludes.Match(r.fs, path)
 	if err != nil {
 		return false, err
 	}

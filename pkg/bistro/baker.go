@@ -52,9 +52,7 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 	}()
 
 	archiver := rootfs.NewArchiver(b.FS, tmpFile)
-	excludes := input.Excludes.Clone()
-	excludes.Add(rootfs.MustPath("/sys"), rootfs.MustPath("/proc"))
-	archiver.SetExcludes(excludes)
+	archiver.SetExcludes(input.Excludes)
 
 	for _, pkg := range input.DpkgList {
 		if err := b.writePackageMetadata(archiver, pkg, input.Excludes); err != nil {
@@ -103,7 +101,7 @@ func (b *baker) writePackageMetadata(
 	}
 
 	for _, srcPath := range files {
-		if skip, err := excludes.LMatches(b.FS, srcPath); err != nil {
+		if skip, err := excludes.Match(b.FS, srcPath); err != nil {
 			return err
 		} else if skip {
 			continue

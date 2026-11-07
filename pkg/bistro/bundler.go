@@ -3,7 +3,6 @@ package bistro
 import (
 	"fmt"
 	"io/fs"
-	"slices"
 	"strings"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
@@ -38,7 +37,16 @@ type bundler struct {
 
 func Bundle(di DI, input BundleInput) error {
 	excludes := rootfs.NewPathSet(input.Excludes)
-	excludeScans := rootfs.NewPathSet(slices.Concat(input.ExcludeScans, input.Excludes))
+	// special files to always exclude
+	excludes.Add(rootfs.MustPath("/sys"), rootfs.MustPath("/proc"))
+	if err := excludes.Resolve(di.FS); err != nil {
+		return err
+	}
+	excludeScans := excludes.Clone()
+	excludeScans.Add(input.ExcludeScans...)
+	if err := excludeScans.Resolve(di.FS); err != nil {
+		return err
+	}
 	scanner := NewScanner(di)
 	scanner.SetExcludes(excludeScans)
 	baker := NewBaker(di)
@@ -99,7 +107,7 @@ func (b *bundler) bundle() error {
 }
 
 func (b *bundler) addCopyFile(file rootfs.Path) error {
-	if matched, err := b.excludes.LMatches(b.FS, file); err != nil {
+	if matched, err := b.excludes.Match(b.FS, file); err != nil {
 		return err
 	} else if matched {
 		return nil
@@ -160,7 +168,7 @@ func (b *bundler) addPackage(t *dpkg.Package) {
 }
 
 func (b *bundler) addFile(file rootfs.Path) error {
-	if matched, err := b.excludes.LMatches(b.FS, file); err != nil {
+	if matched, err := b.excludes.Match(b.FS, file); err != nil {
 		return err
 	} else if matched {
 		return nil

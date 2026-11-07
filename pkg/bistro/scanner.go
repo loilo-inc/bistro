@@ -48,7 +48,7 @@ type ElfDependency struct {
 }
 
 func (s *scanner) Scan(path rootfs.Path) ([]*ElfDependency, error) {
-	if skip, err := s.excludes.LMatches(s.FS, path); err != nil {
+	if skip, err := s.excludes.Match(s.FS, path); err != nil {
 		return nil, err
 	} else if skip {
 		return nil, nil
@@ -147,7 +147,7 @@ func (s *scanner) findElfFiles(dir rootfs.Path) ([]*ElfFile, error) {
 
 func (s *scanner) handleEntry(dir rootfs.Path, entry fs.DirEntry) ([]*ElfFile, error) {
 	subPath := dir.Join(entry.Name())
-	if skip, err := s.excludes.LMatches(s.FS, subPath); err != nil {
+	if skip, err := s.excludes.Match(s.FS, subPath); err != nil {
 		return nil, err
 	} else if skip {
 		return nil, nil

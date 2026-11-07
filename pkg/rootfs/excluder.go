@@ -14,10 +14,10 @@ func NewPathSet(list []Path) PathSet {
 type PathSet struct {
 	origPaths     []Path
 	resolvedPaths []Path
-	resolved      bool
+	resolvedIdx   int
 }
 
-func pathMatches(p Path, list []Path) bool {
+func pathMatch(p Path, list []Path) bool {
 	for _, prefix := range list {
 		excluded := prefix.Abs()
 		if p.Abs() == excluded ||
@@ -28,9 +28,9 @@ func pathMatches(p Path, list []Path) bool {
 	return false
 }
 
-func (ps *PathSet) resolveLinks(fss fs.FS) error {
-	var result []Path
-	for _, p := range ps.origPaths {
+func (ps *PathSet) Resolve(fss fs.FS) error {
+	for i := ps.resolvedIdx; i < len(ps.origPaths); i++ {
+		p := ps.origPaths[i]
 		dir := p.Dir()
 		realDir, err := dir.RealPath(fss)
 		switch {
@@ -39,21 +39,19 @@ func (ps *PathSet) resolveLinks(fss fs.FS) error {
 		case err != nil:
 			return err
 		case realDir.Abs() != dir.Abs():
-			result = append(result, realDir.Join(p.Base()))
+			ps.resolvedPaths = append(ps.resolvedPaths, realDir.Join(p.Base()))
 		}
-		result = append(result, p)
+		ps.resolvedIdx += 1
 	}
-	ps.resolvedPaths = result
-	ps.resolved = true
 	return nil
 }
 
-func (ps *PathSet) LMatches(fss fs.FS, p Path) (bool, error) {
-	if pathMatches(p, ps.origPaths) {
+func (ps *PathSet) Match(fss fs.FS, p Path) (bool, error) {
+	if pathMatch(p, ps.origPaths) {
 		return true, nil
 	}
-	if !ps.resolved {
-		if err := ps.resolveLinks(fss); err != nil {
+	if !ps.isResolved() {
+		if err := ps.Resolve(fss); err != nil {
 			return false, err
 		}
 	}
@@ -64,20 +62,24 @@ func (ps *PathSet) LMatches(fss fs.FS, p Path) (bool, error) {
 	case err != nil:
 		return false, err
 	default:
-		return pathMatches(*real, ps.resolvedPaths), nil
+		return pathMatch(*real, ps.origPaths) ||
+			pathMatch(*real, ps.resolvedPaths), nil
 	}
 	return false, nil
+}
+
+func (ps *PathSet) isResolved() bool {
+	return ps.resolvedIdx >= len(ps.origPaths)
 }
 
 func (ps *PathSet) Clone() PathSet {
 	return PathSet{
 		origPaths:     append([]Path(nil), ps.origPaths...),
 		resolvedPaths: append([]Path(nil), ps.resolvedPaths...),
-		resolved:      ps.resolved,
+		resolvedIdx:   ps.resolvedIdx,
 	}
 }
 
 func (ps *PathSet) Add(p ...Path) {
 	ps.origPaths = append(ps.origPaths, p...)
-	ps.resolved = false
 }
