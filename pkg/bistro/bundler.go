@@ -2,7 +2,6 @@ package bistro
 
 import (
 	"fmt"
-	"io/fs"
 	"strings"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
@@ -16,10 +15,6 @@ type BundleInput struct {
 	Packages     []string
 	Excludes     []rootfs.Path
 	ExcludeScans []rootfs.Path
-}
-
-type rootBundler struct {
-	DI
 }
 
 type bundler struct {
@@ -66,7 +61,7 @@ func (b *bundler) bundle() error {
 		if err != nil {
 			return err
 		}
-		if err := b.addCopyFile(file); err != nil {
+		if err := b.addFile(file); err != nil {
 			return err
 		}
 		if err := b.addDependency(deps); err != nil {
@@ -104,37 +99,6 @@ func (b *bundler) bundle() error {
 		Files:    b.files,
 		Excludes: b.excludes,
 	})
-}
-
-func (b *bundler) addCopyFile(file rootfs.Path) error {
-	if matched, err := b.excludes.Match(b.FS, file); err != nil {
-		return err
-	} else if matched {
-		return nil
-	}
-	lstat, err := fs.Lstat(b.FS, file.Path())
-	if err != nil {
-		return err
-	}
-
-	if err := b.addFile(file); err != nil {
-		return err
-	}
-
-	if !lstat.IsDir() {
-		return nil
-	}
-	entries, err := fs.ReadDir(b.FS, file.Path())
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		err := b.addCopyFile(file.Join(entry.Name()))
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (b *bundler) addDependency(deps []*ElfDependency) error {

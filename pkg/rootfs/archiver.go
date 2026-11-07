@@ -12,6 +12,8 @@ import (
 type Archiver interface {
 	// Copy copies the file or directory at the given absolute path into the root filesystem.
 	Copy(path Path) error
+	// CopyRecursive copies the file or directory at the given absolute path and all its contents into the root filesystem.
+	CopyRecursive(path Path) error
 	// Add adds a file with the given content and mode to the root filesystem.
 	Add(path Path, content []byte, mode fs.FileMode) error
 	// Close finalizes the root filesystem, writing any remaining data.
@@ -21,11 +23,11 @@ type Archiver interface {
 }
 
 type archiver struct {
-	symlink  SymlinkResolver
-	copied   util.Map[Path, bool]
-	excludes PathSet
-	tw       *tar.Writer
-	fs       fs.FS
+	traverser *fileTraverser
+	copied    util.Map[Path, bool]
+	excludes  PathSet
+	tw        *tar.Writer
+	fs        fs.FS
 }
 
 type resolvingState struct {
@@ -37,9 +39,9 @@ var _ Archiver = &archiver{}
 
 func NewArchiver(fs fs.FS, out io.Writer) Archiver {
 	r := &archiver{
-		tw:      tar.NewWriter(out),
-		fs:      fs,
-		symlink: NewSymlinkResolver(fs),
+		tw:        tar.NewWriter(out),
+		fs:        fs,
+		traverser: newFileTraverser(fs),
 	}
 	return r
 }
@@ -49,7 +51,11 @@ func (r *archiver) SetExcludes(excludes PathSet) {
 }
 
 func (r *archiver) Copy(path Path) error {
-	return r.symlink.Visit(path, r.shouldCopyFile, r.copyOne)
+	return r.traverser.Walk(path, r.shouldCopyFile, r.copyOne)
+}
+
+func (r *archiver) CopyRecursive(path Path) error {
+	return r.traverser.Traverse(path, r.shouldCopyFile, r.copyOne)
 }
 
 func (r *archiver) Add(path Path, content []byte, mode fs.FileMode) error {

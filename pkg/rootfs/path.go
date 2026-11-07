@@ -101,5 +101,5 @@ func (p Path) TarName() string {
 }
 
 func (p Path) RealPath(fss fs.FS) (*Path, error) {
-	return NewSymlinkResolver(fss).Resolve(p)
+	return newSymlinkResolver(fss).Resolve(p)
 }

@@ -99,10 +99,10 @@ func TestRealPathSymlinkLimit(t *testing.T) {
 		fss[fmt.Sprintf("link%d", i)] = &fstest.MapFile{Mode: fs.ModeSymlink | 0777, Data: fmt.Appendf(nil, "link%d", i+1)}
 	}
 	fss["link257"] = &fstest.MapFile{Mode: 0644}
-	resolver := NewSymlinkResolver(fss)
+	resolver := newSymlinkResolver(fss)
 	_, err := resolver.Resolve(MustPath("link0"))
 	require.ErrorContains(t, err, "too many symlinks")
-	require.Zero(t, resolver.(*symlinkResolver).resolving.Size())
+	require.Zero(t, resolver.resolving.Size())
 	resolved, err := resolver.Resolve(MustPath("link257"))
 	require.NoError(t, err)
 	require.Equal(t, MustPath("link257"), *resolved)

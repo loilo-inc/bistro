@@ -60,7 +60,7 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 		}
 	}
 	for _, file := range input.Files {
-		if err := archiver.Copy(file); err != nil {
+		if err := archiver.CopyRecursive(file); err != nil {
 			return err
 		}
 	}

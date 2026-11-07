@@ -341,7 +341,7 @@ func TestArchiverSymlinkRootBoundary(t *testing.T) {
 				} else {
 					require.NoError(t, err)
 				}
-				require.Zero(t, root.symlink.(*symlinkResolver).resolving.Size(), "link resolution state must be cleared")
+				require.Zero(t, root.symlink.resolving.Size(), "link resolution state must be cleared")
 			}
 			valid := filepath.Join(dir, "valid")
 			writeRootFSFile(t, valid, "after resolution", 0644)
