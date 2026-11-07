@@ -9,7 +9,7 @@ import (
 )
 
 type Scanner interface {
-	Scan(origPath rootfs.Path) ([]*ElfDependency, error)
+	Scan(origPath rootfs.Path, excludeScans []rootfs.Path) ([]*ElfDependency, error)
 }
 
 type scanner struct {
@@ -44,13 +44,16 @@ type ElfDependency struct {
 	BrokenLibs   []string
 }
 
-func (s *scanner) Scan(path rootfs.Path) ([]*ElfDependency, error) {
+func (s *scanner) Scan(path rootfs.Path, excludes []rootfs.Path) ([]*ElfDependency, error) {
+	if IsExcluded(path, excludes) {
+		return nil, nil
+	}
 	stat, err := fs.Stat(s.FS, path.Path())
 	if err != nil {
 		return nil, err
 	}
 	if stat.IsDir() {
-		return s.ScanDir(path)
+		return s.ScanDir(path, excludes)
 	}
 	elfFile, isElf, err := s.handleFile(path)
 	if !isElf {
@@ -66,8 +69,8 @@ func (s *scanner) Scan(path rootfs.Path) ([]*ElfDependency, error) {
 	return nil, nil
 }
 
-func (s *scanner) ScanDir(path rootfs.Path) ([]*ElfDependency, error) {
-	elfFiles, err := s.findElfFiles(path)
+func (s *scanner) ScanDir(path rootfs.Path, excludes []rootfs.Path) ([]*ElfDependency, error) {
+	elfFiles, err := s.findElfFiles(path, excludes)
 	if err != nil {
 		return nil, err
 	}
@@ -108,21 +111,25 @@ func (s *scanner) ScanFile(file *ElfFile) (*ElfDependency, error) {
 	return result, nil
 }
 
-func (s *scanner) findElfFiles(dir rootfs.Path) ([]*ElfFile, error) {
+func (s *scanner) findElfFiles(dir rootfs.Path, excludes []rootfs.Path) ([]*ElfFile, error) {
 	ertries, err := fs.ReadDir(s.FS, dir.Path())
 	if err != nil {
 		return nil, err
 	}
 	var result []*ElfFile
 	for _, entry := range ertries {
+		subPath := dir.Join(entry.Name())
+		if IsExcluded(subPath, excludes) {
+			continue
+		}
 		if entry.IsDir() {
-			if subResult, err := s.findElfFiles(dir.Join(entry.Name())); err != nil {
+			if subResult, err := s.findElfFiles(subPath, excludes); err != nil {
 				return nil, err
 			} else {
 				result = append(result, subResult...)
 			}
 		} else {
-			if file, isElf, err := s.handleFile(dir.Join(entry.Name())); err != nil {
+			if file, isElf, err := s.handleFile(subPath); err != nil {
 				return nil, err
 			} else if isElf {
 				result = append(result, file)

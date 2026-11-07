@@ -10,11 +10,13 @@ import (
 )
 
 type BundleInput struct {
-	Out      string
-	Files    []rootfs.Path
-	Scans    []rootfs.Path
-	Packages []string
-	Copies   []rootfs.Path
+	Out           string
+	Files         []rootfs.Path
+	Scans         []rootfs.Path
+	ExcludeScans  []rootfs.Path
+	Packages      []string
+	Copies        []rootfs.Path
+	ExcludeCopies []rootfs.Path
 }
 
 type Bundler interface {
@@ -52,7 +54,7 @@ func (b *bundler) Bundle(input BundleInput) error {
 	defer b.reset()
 
 	for _, file := range input.Files {
-		deps, err := b.scanner.Scan(file)
+		deps, err := b.scanner.Scan(file, input.ExcludeScans)
 		if err != nil {
 			return err
 		}
@@ -64,7 +66,7 @@ func (b *bundler) Bundle(input BundleInput) error {
 	}
 
 	for _, scan := range input.Scans {
-		deps, err := b.scanner.Scan(scan)
+		deps, err := b.scanner.Scan(scan, input.ExcludeScans)
 		if err != nil {
 			return err
 		}
@@ -81,7 +83,7 @@ func (b *bundler) Bundle(input BundleInput) error {
 	}
 
 	for _, copy := range input.Copies {
-		if err := b.addCopyFile(copy); err != nil {
+		if err := b.addCopyFile(copy, input.ExcludeCopies); err != nil {
 			return err
 		}
 	}
@@ -103,7 +105,10 @@ func (b *bundler) Bundle(input BundleInput) error {
 	})
 }
 
-func (b *bundler) addCopyFile(file rootfs.Path) error {
+func (b *bundler) addCopyFile(file rootfs.Path, excludes []rootfs.Path) error {
+	if IsExcluded(file, excludes) {
+		return nil
+	}
 	lstat, err := fs.Lstat(b.FS, file.Path())
 	if err != nil {
 		return err
@@ -119,7 +124,7 @@ func (b *bundler) addCopyFile(file rootfs.Path) error {
 		return err
 	}
 	for _, entry := range entries {
-		err := b.addCopyFile(file.Join(entry.Name()))
+		err := b.addCopyFile(file.Join(entry.Name()), excludes)
 		if err != nil {
 			return err
 		}
