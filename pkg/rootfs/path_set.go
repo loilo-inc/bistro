@@ -58,17 +58,28 @@ func (ps *PathSet) Match(fss fs.FS, p Path) (bool, error) {
 			return false, err
 		}
 	}
-	real, err := p.RealPath(fss)
+	if pathMatch(p, ps.resolvedPaths) {
+		return true, nil
+	}
+	onStart := func(p Path) (bool, error) {
+		if pathMatch(p, ps.origPaths) || pathMatch(p, ps.resolvedPaths) {
+			// stop walk if transitive path matches the list
+			return false, nil
+		}
+		return true, nil
+	}
+	dest, err := newSymlinkVisitor(fss, onStart, nil).Resolve(p)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		break
+		return false, nil
 	case err != nil:
 		return false, err
+	case dest == nil:
+		return true, nil
 	default:
-		return pathMatch(*real, ps.origPaths) ||
-			pathMatch(*real, ps.resolvedPaths), nil
+		return pathMatch(*dest, ps.origPaths) ||
+			pathMatch(*dest, ps.resolvedPaths), nil
 	}
-	return false, nil
 }
 
 func (ps *PathSet) isResolved() bool {

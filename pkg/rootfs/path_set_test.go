@@ -132,3 +132,53 @@ func TestPathSetResolutionErrors(t *testing.T) {
 		require.Equal(t, MustPaths("/target/file"), ps.resolvedPaths)
 	})
 }
+
+func TestPathSetStopsAtExcludedSymlinkTargets(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fss  fs.FS
+	}{
+		{name: "circular link inside excluded directory", fss: fstest.MapFS{
+			"link":        {Mode: fs.ModeSymlink | 0777, Data: []byte("/target/loop")},
+			"target/loop": {Mode: fs.ModeSymlink | 0777, Data: []byte("loop")},
+		}},
+		{name: "permission denied inside excluded directory", fss: lstatErrorFS{FS: fstest.MapFS{
+			"link":        {Mode: fs.ModeSymlink | 0777, Data: []byte("/target/file")},
+			"target/file": {},
+		}, cause: fs.ErrPermission}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ps := NewPathSet(MustPaths("/target"))
+			for range 2 {
+				matched, err := ps.Match(tc.fss, MustPath("/link"))
+				require.NoError(t, err)
+				require.True(t, matched)
+			}
+			// The same target must still report an error when it is not excluded.
+			unexcluded := NewPathSet(nil)
+			_, err := unexcluded.Match(tc.fss, MustPath("/link"))
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestPathSetMatchesCanonicalExcludedLinksBeforeResolution(t *testing.T) {
+	for _, target := range []string{"keep", "missing", "link"} {
+		t.Run(target, func(t *testing.T) {
+			fss := fstest.MapFS{
+				"alias":     {Mode: fs.ModeSymlink | 0777, Data: []byte("real")},
+				"real/link": {Mode: fs.ModeSymlink | 0777, Data: []byte(target)},
+				"real/keep": {Data: []byte("keep")},
+			}
+			ps := NewPathSet(MustPaths("/alias/link"))
+			for range 2 {
+				matched, err := ps.Match(fss, MustPath("/real/link"))
+				require.NoError(t, err)
+				require.True(t, matched, "the canonical excluded path must match without following its final link")
+			}
+			matched, err := ps.Match(fss, MustPath("/real/keep"))
+			require.NoError(t, err)
+			require.False(t, matched, "excluding a link must not exclude its target")
+		})
+	}
+}

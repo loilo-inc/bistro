@@ -158,8 +158,7 @@ func TestArchiverStopsBeforeSpecialTargets(t *testing.T) {
 			require.NoError(t, a.Copy(MustPath("alias")))
 			require.NoError(t, a.Close())
 			entries := readRootFSTar(t, out.Bytes())
-			require.Len(t, entries, 2)
-			require.Equal(t, target, entries["alias"].header.Linkname)
+			require.Empty(t, entries, "the alias must be skipped before inspecting its excluded target")
 		})
 	}
 }

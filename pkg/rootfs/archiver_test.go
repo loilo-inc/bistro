@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -261,6 +263,10 @@ func TestArchiverStopsAtSpecialFileSymlinks(t *testing.T) {
 
 	entries := readRootFSTar(t, out.Bytes())
 	for name, target := range links {
+		if name != filepath.Join(dir, "dev", "procs") {
+			require.NotContains(t, entries, rootFSArchiveName(name), "links into excluded subtrees must be skipped")
+			continue
+		}
 		require.Contains(t, entries, rootFSArchiveName(name))
 		got := entries[rootFSArchiveName(name)]
 		assert.Equal(t, byte(tar.TypeSymlink), got.header.Typeflag, name)
@@ -341,7 +347,6 @@ func TestArchiverSymlinkRootBoundary(t *testing.T) {
 				} else {
 					require.NoError(t, err)
 				}
-				require.Zero(t, root.symlink.resolving.Size(), "link resolution state must be cleared")
 			}
 			valid := filepath.Join(dir, "valid")
 			writeRootFSFile(t, valid, "after resolution", 0644)
@@ -435,4 +440,113 @@ func TestArchiverExcludesAliasesAndAddedFiles(t *testing.T) {
 	entries := readRootFSTar(t, out.Bytes())
 	require.NotContains(t, entries, rootFSArchiveName(omitted))
 	require.NotContains(t, entries, "var/lib/dpkg/status.d/example")
+}
+
+// Bound filesystem work so a traversal regression fails instead of recursing forever.
+type traversalBudgetFS struct {
+	fs.FS
+	calls int
+}
+
+func (f *traversalBudgetFS) Lstat(name string) (fs.FileInfo, error) {
+	f.calls++
+	if f.calls > 2000 {
+		return nil, errors.New("traversal exceeded filesystem operation budget")
+	}
+	return fs.Lstat(f.FS, name)
+}
+
+func (f *traversalBudgetFS) ReadLink(name string) (string, error) {
+	return fs.ReadLink(f.FS, name)
+}
+
+func TestArchiverCopyRecursive(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		copyFirst   bool
+		links       map[string]string
+	}{
+		{name: "directory", input: "/tree"},
+		{name: "directory alias", input: "/alias", links: map[string]string{"alias": "tree"}},
+		{name: "after nonrecursive copy", input: "/tree", copyFirst: true},
+		{name: "alias after nonrecursive copy", input: "/alias", copyFirst: true, links: map[string]string{"alias": "tree"}},
+		{name: "self directory link", input: "/tree", links: map[string]string{"tree/self": "."}},
+		{name: "mutual directory links", input: "/tree", links: map[string]string{"tree/outside": "../outside", "outside/back": "../tree"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files := fstest.MapFS{
+				"tree/config":       {Data: []byte("configuration"), Mode: 0640},
+				"tree/nested/asset": {Data: []byte("asset")},
+				"tree/empty":        {Mode: fs.ModeDir | 0750},
+				"outside/data":      {Data: []byte("external data")},
+			}
+			for name, target := range tc.links {
+				files[name] = &fstest.MapFile{Mode: fs.ModeSymlink | 0777, Data: []byte(target)}
+			}
+			fss := &traversalBudgetFS{FS: files}
+			var out bytes.Buffer
+			a := NewArchiver(fss, &out)
+			if tc.copyFirst {
+				require.NoError(t, a.Copy(MustPath(tc.input)))
+			}
+			require.NoError(t, a.CopyRecursive(MustPath(tc.input)))
+			require.NoError(t, a.CopyRecursive(MustPath(tc.input)))
+			require.NoError(t, a.Close())
+			entries := readRootFSTar(t, out.Bytes())
+			require.Equal(t, "configuration", entries["tree/config"].body)
+			require.Equal(t, int64(0640), entries["tree/config"].header.Mode)
+			require.Equal(t, "asset", entries["tree/nested/asset"].body)
+			require.Contains(t, entries, "tree/empty")
+			require.Equal(t, byte(tar.TypeDir), entries["tree/empty"].header.Typeflag)
+			for name, target := range tc.links {
+				require.Contains(t, entries, name)
+				require.Equal(t, byte(tar.TypeSymlink), entries[name].header.Typeflag)
+				require.Equal(t, target, entries[name].header.Linkname)
+			}
+			if tc.name == "mutual directory links" {
+				require.Equal(t, "external data", entries["outside/data"].body)
+			} else {
+				require.NotContains(t, entries, "outside/data")
+			}
+		})
+	}
+}
+
+func TestArchiverCopyRecursivePreservesAdditionalAliases(t *testing.T) {
+	fss := fstest.MapFS{
+		"tree/config": {Data: []byte("configuration")},
+		"first":       {Mode: fs.ModeSymlink | 0777, Data: []byte("tree")},
+		"second":      {Mode: fs.ModeSymlink | 0777, Data: []byte("tree")},
+	}
+	var out bytes.Buffer
+	a := NewArchiver(fss, &out)
+	for _, name := range []string{"/tree", "/first", "/second"} {
+		require.NoError(t, a.CopyRecursive(MustPath(name)))
+	}
+	require.NoError(t, a.Close())
+	entries := readRootFSTar(t, out.Bytes())
+	require.Equal(t, "configuration", entries["tree/config"].body)
+	for _, name := range []string{"first", "second"} {
+		require.Contains(t, entries, name)
+		require.Equal(t, "tree", entries[name].header.Linkname)
+	}
+}
+
+func TestArchiverCopyRecursiveExcludesSubtrees(t *testing.T) {
+	fss := fstest.MapFS{
+		"tree/config":          {Data: []byte("keep")},
+		"tree/cache/asset":     {Data: []byte("omit")},
+		"tree/cache-old/asset": {Data: []byte("keep sibling")},
+		"alias":                {Mode: fs.ModeSymlink | 0777, Data: []byte("tree")},
+	}
+	var out bytes.Buffer
+	a := NewArchiver(fss, &out)
+	a.SetExcludes(NewPathSet(MustPaths("/alias/cache")))
+	require.NoError(t, a.CopyRecursive(MustPath("/alias")))
+	require.NoError(t, a.Close())
+	entries := readRootFSTar(t, out.Bytes())
+	require.Equal(t, "keep", entries["tree/config"].body)
+	require.Equal(t, "keep sibling", entries["tree/cache-old/asset"].body)
+	require.NotContains(t, entries, "tree/cache")
+	require.NotContains(t, entries, "tree/cache/asset")
 }

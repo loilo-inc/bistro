@@ -533,3 +533,42 @@ func TestBundlePropagatesDependencyExclusionResolutionError(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "previous archive", string(data))
 }
+
+func TestBundleCopiesDirectoryAssetsAfterPackageCollection(t *testing.T) {
+	for _, symlink := range []bool{false, true} {
+		name := "directory"
+		if symlink {
+			name = "directory alias"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := rootFSTempDir(t)
+			tree := filepath.Join(dir, "tree")
+			config := filepath.Join(tree, "config")
+			extension := filepath.Join(tree, "nested", "extension.so")
+			empty := filepath.Join(tree, "empty")
+			writeRootFSFile(t, config, "unlisted configuration", 0644)
+			writeTestELF(t, extension, elf.ET_DYN, false, "missing.so")
+			require.NoError(t, os.Mkdir(empty, 0755))
+			input := tree
+			if symlink {
+				input = filepath.Join(dir, "alias")
+				require.NoError(t, os.Symlink("tree", input))
+			}
+			pkg := testPackage(t, "app-data", "", "", dpkg.StatusInstalled)
+			d := packageFilesFixture(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {tree}})
+			out := filepath.Join(dir, "out.tar")
+			require.NoError(t, Bundle(DI{FS: d.fs, Query: d.query}, BundleInput{
+				Out: out, Files: rootfs.MustPaths(input), Packages: []string{pkg.NameWithArch()},
+				ExcludeScans: rootfs.MustPaths(input),
+			}))
+			entries := readBundleTar(t, out)
+			require.Equal(t, "unlisted configuration", entries[rootFSArchiveName(config)].body)
+			require.Contains(t, entries, rootFSArchiveName(extension), "ELF excluded from scanning must still be copied")
+			require.Contains(t, entries, rootFSArchiveName(empty))
+			require.Contains(t, entries, "var/lib/dpkg/status.d/app-data")
+			if symlink {
+				require.Equal(t, byte(tar.TypeSymlink), entries[rootFSArchiveName(input)].header.Typeflag)
+			}
+		})
+	}
+}
