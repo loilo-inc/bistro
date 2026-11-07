@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -24,7 +25,7 @@ func TestBakerCreatesArchive(t *testing.T) {
 	d := packageFilesFixture(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {owned}})
 	out := filepath.Join(dir, "rootfs.tar")
 	writeRootFSFile(t, out, "previous archive", 0644)
-	err := NewBaker(DI{FS: d.fs, Query: d.query}).CreateRootFS(&BakeInput{Out: out, DpkgList: []*dpkg.Package{pkg}, Files: rootfs.MustPaths(explicit, owned, explicit)})
+	err := NewBaker(DI{FS: d.fs, Query: d.query}).CreateRootFS(&BakeInput{Out: rootfs.MustPath(out), DpkgList: []*dpkg.Package{pkg}, Files: rootfs.MustPaths(explicit, owned, explicit)})
 	require.NoError(t, err)
 	entries := readBundleTar(t, out)
 	assert.Equal(t, "package data", entries[rootFSArchiveName(owned)].body)
@@ -52,7 +53,7 @@ func TestBakerSkipsMissingPackageFiles(t *testing.T) {
 	var stderr bytes.Buffer
 	out := filepath.Join(dir, "archive.tar")
 	err := NewBaker(DI{FS: d.fs, Query: d.query, Logger: NewLogger(io.Discard, &stderr)}).CreateRootFS(&BakeInput{
-		Out: out, DpkgList: []*dpkg.Package{pkg},
+		Out: rootfs.MustPath(out), DpkgList: []*dpkg.Package{pkg},
 	})
 	require.NoError(t, err)
 	entries := readBundleTar(t, out)
@@ -88,7 +89,7 @@ func TestBakerFailurePreservesOutputAndRemovesTemporaryFile(t *testing.T) {
 				require.NoError(t, os.Symlink("loop", broken))
 				require.NoError(t, os.WriteFile(filepath.Join(d.baseDir, "info/example.list"), []byte(broken+"\n"), 0644))
 			}
-			input := &BakeInput{Out: out, DpkgList: []*dpkg.Package{pkg}}
+			input := &BakeInput{Out: rootfs.MustPath(out), DpkgList: []*dpkg.Package{pkg}}
 			if stage == "explicit file" {
 				input.Files = rootfs.MustPaths(filepath.Join(dir, "missing"))
 			}
@@ -134,7 +135,7 @@ func TestBakerFailurePreservesOutputAndRemovesTemporaryFile(t *testing.T) {
 
 func TestBakerMissingOutputDirectory(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "missing", "archive.tar")
-	err := NewBaker(DI{FS: os.DirFS("/")}).CreateRootFS(&BakeInput{Out: out})
+	err := NewBaker(DI{FS: os.DirFS("/")}).CreateRootFS(&BakeInput{Out: rootfs.MustPath(out)})
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
@@ -143,7 +144,7 @@ func TestBakerRejectsConflictingMetadataNames(t *testing.T) {
 	out := filepath.Join(dir, "archive.tar")
 	writeRootFSFile(t, out, "original", 0644)
 	err := NewBaker(DI{FS: os.DirFS("/")}).CreateRootFS(&BakeInput{
-		Out: out,
+		Out: rootfs.MustPath(out),
 		DpkgList: []*dpkg.Package{
 			testPackage(t, "library:arm64", "", "arm64", ""),
 			testPackage(t, "library:amd64", "", "amd64", ""),
@@ -180,8 +181,56 @@ func TestBakerMetadataWriteFailures(t *testing.T) {
 			pkg := testPackage(t, "example", "", "", "")
 			d := packageFilesFixture(t, []*dpkg.Package{pkg}, nil)
 			b := NewBaker(DI{FS: d.fs}).(*baker)
-			require.ErrorIs(t, b.writePackageMetadata(r, pkg), failure)
+			require.ErrorIs(t, b.writePackageMetadata(r, pkg, rootfs.PathSet{}), failure)
 			assert.Equal(t, failAt, r.calls)
+		})
+	}
+}
+
+func TestBakerExcludesArchivesInsideSourceDirectory(t *testing.T) {
+	for _, mode := range []string{"relative output", "absolute output", "symlink output directory"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := rootFSTempDir(t)
+			source := filepath.Join(dir, "source")
+			config := filepath.Join(source, "config")
+			asset := filepath.Join(source, "nested", "asset")
+			writeRootFSFile(t, asset, "asset data", 0644)
+			t.Chdir(source)
+			out := filepath.Join(source, "bundle.tar")
+			switch mode {
+			case "relative output":
+				out = "bundle.tar"
+			case "symlink output directory":
+				alias := filepath.Join(dir, "alias")
+				require.NoError(t, os.Symlink("source", alias))
+				out = filepath.Join(alias, "bundle.tar")
+			}
+			baker := NewBaker(DI{FS: os.DirFS("/")})
+			for _, content := range []string{"first version", "second version"} {
+				// The second request must also exclude the archive from the first request.
+				writeRootFSFile(t, config, content, 0644)
+				require.NoError(t, baker.CreateRootFS(&BakeInput{Out: rootfs.MustPath(source).Resolve(out), Files: rootfs.MustPaths(source)}))
+				entries := readBundleTar(t, out)
+				require.Equal(t, content, entries[rootFSArchiveName(config)].body)
+				require.Equal(t, "asset data", entries[rootFSArchiveName(asset)].body)
+				var descendants []string
+				prefix := rootFSArchiveName(source) + "/"
+				for name := range entries {
+					if relative, ok := strings.CutPrefix(name, prefix); ok {
+						descendants = append(descendants, relative)
+					}
+				}
+				require.ElementsMatch(t, []string{"config", "nested", "nested/asset"}, descendants,
+					"neither the output archive nor the temporary archive may be bundled")
+				files, err := os.ReadDir(source)
+				require.NoError(t, err)
+				var names []string
+				for _, file := range files {
+					names = append(names, file.Name())
+				}
+				require.ElementsMatch(t, []string{"config", "nested", "bundle.tar"}, names,
+					"no temporary archive may remain after success")
+			}
 		})
 	}
 }

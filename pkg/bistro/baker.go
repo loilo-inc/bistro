@@ -3,7 +3,6 @@ package bistro
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
@@ -24,9 +23,10 @@ func NewBaker(di DI) Baker {
 }
 
 type BakeInput struct {
-	Out      string
+	Out      rootfs.Path
 	DpkgList []*dpkg.Package
 	Files    []rootfs.Path
+	Excludes rootfs.PathSet
 }
 
 func (b *baker) CreateRootFS(input *BakeInput) (err error) {
@@ -39,7 +39,8 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 		}
 		names[pkg.Name()] = pkg.NameWithArch()
 	}
-	tmpFile, err := os.CreateTemp(filepath.Dir(input.Out), "rootfs")
+	outDir := input.Out.Dir()
+	tmpFile, err := os.CreateTemp(outDir.Abs(), "rootfs")
 	if err != nil {
 		return err
 	}
@@ -49,24 +50,28 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 			os.Remove(tmpFile.Name())
 		}
 	}()
-	rootfs := rootfs.NewArchiver(b.FS, tmpFile)
+	tmpPath := rootfs.MustPath(tmpFile.Name())
+	input.Excludes.Add(input.Out, tmpPath)
+	archiver := rootfs.NewArchiver(b.FS, tmpFile)
+	archiver.SetExcludes(input.Excludes)
+
 	for _, pkg := range input.DpkgList {
-		if err := b.writePackageMetadata(rootfs, pkg); err != nil {
+		if err := b.writePackageMetadata(archiver, pkg, input.Excludes); err != nil {
 			return err
 		}
 	}
 	for _, file := range input.Files {
-		if err := rootfs.Copy(file); err != nil {
+		if err := archiver.CopyRecursive(file); err != nil {
 			return err
 		}
 	}
-	if err := rootfs.Close(); err != nil {
+	if err := archiver.Close(); err != nil {
 		return err
 	}
 	if err := tmpFile.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpFile.Name(), input.Out); err != nil {
+	if err := os.Rename(tmpPath.Abs(), input.Out.Abs()); err != nil {
 		return err
 	}
 	return nil
@@ -76,7 +81,11 @@ func (b *baker) CreateRootFS(input *BakeInput) (err error) {
 // directory to store dpkg status used by distroless
 const DpkgStatusDir = "/var/lib/dpkg/status.d"
 
-func (b *baker) writePackageMetadata(rootFS rootfs.Archiver, pkg *dpkg.Package) error {
+func (b *baker) writePackageMetadata(
+	rootFS rootfs.Archiver,
+	pkg *dpkg.Package,
+	excludes rootfs.PathSet,
+) error {
 	if err := rootFS.Add(rootfs.MustPath(DpkgStatusDir).Join(pkg.Name()), []byte(pkg.String()), 0644); err != nil {
 		return err
 	}
@@ -93,6 +102,11 @@ func (b *baker) writePackageMetadata(rootFS rootfs.Archiver, pkg *dpkg.Package) 
 	}
 
 	for _, srcPath := range files {
+		if skip, err := excludes.Match(b.FS, srcPath); err != nil {
+			return err
+		} else if skip {
+			continue
+		}
 		if err := rootFS.Copy(srcPath); os.IsNotExist(err) {
 			b.Logger.Error("File does not exist: %s", srcPath)
 			continue

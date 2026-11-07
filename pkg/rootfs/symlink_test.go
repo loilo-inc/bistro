@@ -133,7 +133,11 @@ func TestArchiverCopyPropagatesResolutionErrors(t *testing.T) {
 			a := NewArchiver(fss, &out)
 			require.ErrorIs(t, a.Copy(MustPath("alias")), cause)
 			require.NoError(t, a.Close())
-			require.Contains(t, readRootFSTar(t, out.Bytes()), "alias")
+			if cause == fs.ErrNotExist {
+				require.Contains(t, readRootFSTar(t, out.Bytes()), "alias")
+			} else {
+				require.NotContains(t, readRootFSTar(t, out.Bytes()), "alias")
+			}
 		})
 	}
 	t.Run("missing input", func(t *testing.T) {
@@ -150,11 +154,11 @@ func TestArchiverStopsBeforeSpecialTargets(t *testing.T) {
 			fss := fstest.MapFS{"alias": {Mode: fs.ModeSymlink | 0777, Data: []byte(target)}}
 			var out bytes.Buffer
 			a := NewArchiver(fss, &out)
+			a.SetExcludes(NewPathSet(MustPaths("/proc", "/sys")))
 			require.NoError(t, a.Copy(MustPath("alias")))
 			require.NoError(t, a.Close())
 			entries := readRootFSTar(t, out.Bytes())
-			require.Len(t, entries, 2)
-			require.Equal(t, target, entries["alias"].header.Linkname)
+			require.Empty(t, entries, "the alias must be skipped before inspecting its excluded target")
 		})
 	}
 }

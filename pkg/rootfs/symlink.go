@@ -11,16 +11,28 @@ import (
 	"github.com/loilo-inc/bistro/pkg/util"
 )
 
-type symlinkResolver struct {
+type SymlinkResolver interface {
+	Resolve(path Path) (*Path, error)
+}
+
+type symlinkWalker struct {
 	resolving util.Map[resolvingState, bool]
 	visited   util.Map[Path, bool]
 	fs        fs.FS
 	onVisit   func(file Path, link string, stat fs.FileInfo) error
-	onStart   func(file Path) bool
+	onStart   func(file Path) (bool, error)
 }
 
-func newSymlinkResolver(fs fs.FS) *symlinkResolver {
-	return &symlinkResolver{fs: fs}
+func newSymlinkVisitor(
+	fs fs.FS,
+	onStart func(file Path) (bool, error),
+	onVisit func(file Path, link string, stat fs.FileInfo) error,
+) *symlinkWalker {
+	return &symlinkWalker{fs: fs, onStart: onStart, onVisit: onVisit}
+}
+
+func newSymlinkResolver(fs fs.FS) *symlinkWalker {
+	return &symlinkWalker{fs: fs}
 }
 
 var errVisitCanceld = errors.New("visit cancelled")
@@ -30,17 +42,26 @@ type pathResolution struct {
 	lstat fs.FileInfo
 }
 
-func (r *symlinkResolver) Resolve(path Path) (*Path, error) {
+func (r *symlinkWalker) Resolve(path Path) (*Path, error) {
 	resolved, err := r.resolve(path)
+	if errors.Is(err, errVisitCanceld) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
 	return resolved.path, nil
 }
 
-func (r *symlinkResolver) resolve(path Path) (*pathResolution, error) {
-	if r.onStart != nil && !r.onStart(path) {
-		return nil, errVisitCanceld
+func (r *symlinkWalker) resolve(path Path) (*pathResolution, error) {
+	if r.onStart != nil {
+		ok, err := r.onStart(path)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, errVisitCanceld
+		}
 	}
 	var paths []Path
 	var p Path = path
@@ -64,25 +85,7 @@ func (r *symlinkResolver) resolve(path Path) (*pathResolution, error) {
 	return &pathResolution{path: &path, lstat: lstat}, nil
 }
 
-func (r *symlinkResolver) Visit(
-	path Path,
-	onStart func(file Path) bool,
-	onVisit func(file Path, link string, stat fs.FileInfo) error,
-) error {
-	r.onStart = onStart
-	r.onVisit = onVisit
-	defer func() {
-		r.onStart = nil
-		r.onVisit = nil
-	}()
-	_, err := r.Resolve(path)
-	if errors.Is(err, errVisitCanceld) {
-		return nil
-	}
-	return err
-}
-
-func (r *symlinkResolver) handleSubdir(file Path, origPath Path) (bool, *pathResolution, error) {
+func (r *symlinkWalker) handleSubdir(file Path, origPath Path) (bool, *pathResolution, error) {
 	lstat, err := fs.Lstat(r.fs, file.Path())
 	if err != nil {
 		return false, nil, err
@@ -110,7 +113,7 @@ func (r *symlinkResolver) handleSubdir(file Path, origPath Path) (bool, *pathRes
 	return false, &pathResolution{path: &file, lstat: lstat}, nil
 }
 
-func (r *symlinkResolver) handleLink(file Path, link string, remaining string) (*pathResolution, error) {
+func (r *symlinkWalker) handleLink(file Path, link string, remaining string) (*pathResolution, error) {
 	state := resolvingState{path: file, remaining: remaining}
 	if r.resolving.Has(state) {
 		return nil, fmt.Errorf("circular symlink detected: %s -> %s", file.Abs(), link)
@@ -128,7 +131,7 @@ func (r *symlinkResolver) handleLink(file Path, link string, remaining string) (
 	return r.resolve(target.Join(remaining))
 }
 
-func (r *symlinkResolver) walk(dir Path, link string) (*Path, error) {
+func (r *symlinkWalker) walk(dir Path, link string) (*Path, error) {
 	var curr Path
 	var currIsDir = true
 	if path.IsAbs(link) {
@@ -168,7 +171,7 @@ func (r *symlinkResolver) walk(dir Path, link string) (*Path, error) {
 	return &curr, nil
 }
 
-func (r *symlinkResolver) callOnVisit(file Path, link string, stat fs.FileInfo) error {
+func (r *symlinkWalker) callOnVisit(file Path, link string, stat fs.FileInfo) error {
 	if r.onVisit == nil {
 		return nil
 	}

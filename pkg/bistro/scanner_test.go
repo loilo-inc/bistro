@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
@@ -45,7 +44,7 @@ func TestScannerELFTypes(t *testing.T) {
 			}
 			s := NewScanner(DI{FS: os.DirFS("/"), Query: unownedFilesQuery(t), Ldd: resolver})
 			for range 2 {
-				deps, err := s.Scan(rootfs.MustPath(path), nil)
+				deps, err := s.Scan(rootfs.MustPath(path))
 				require.NoError(t, err)
 				if !tt.include {
 					assert.Empty(t, deps)
@@ -74,7 +73,7 @@ func TestScannerRecursiveAndRelativePaths(t *testing.T) {
 	writeRootFSFile(t, filepath.Join(dir, "README"), "plain text", 0644)
 	writeRootFSFile(t, filepath.Join(dir, "empty"), "", 0644)
 	s := NewScanner(DI{FS: os.DirFS("/"), Query: unownedFilesQuery(t), Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: os.DirFS("/")})})
-	deps, err := s.Scan(rootfs.MustPath(dir), nil)
+	deps, err := s.Scan(rootfs.MustPath(dir))
 	require.NoError(t, err)
 	var got []string
 	for _, dep := range deps {
@@ -82,12 +81,12 @@ func TestScannerRecursiveAndRelativePaths(t *testing.T) {
 	}
 	assert.ElementsMatch(t, paths, got)
 	t.Chdir(dir)
-	deps, err = s.Scan(rootfs.MustPath(dir).Resolve("nested/extension.node"), nil)
+	deps, err = s.Scan(rootfs.MustPath(dir).Resolve("nested/extension.node"))
 	require.NoError(t, err)
 	require.Len(t, deps, 1)
 	assert.Equal(t, paths[1], deps[0].ElfFile.Path.Abs())
 	for _, p := range []string{"README", "empty", "nested/object.o", "nested/object.o"} {
-		deps, err := s.Scan(rootfs.MustPath(dir).Resolve(p), nil)
+		deps, err := s.Scan(rootfs.MustPath(dir).Resolve(p))
 		require.NoError(t, err)
 		assert.Empty(t, deps)
 	}
@@ -102,41 +101,37 @@ func TestScannerSymlinks(t *testing.T) {
 	dirlink := filepath.Join(dir, "directory")
 	require.NoError(t, os.Symlink("nested", dirlink))
 	s := NewScanner(DI{FS: os.DirFS("/"), Query: unownedFilesQuery(t), Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: os.DirFS("/")})})
-	deps, err := s.Scan(rootfs.MustPath(link), nil)
+	deps, err := s.Scan(rootfs.MustPath(link))
 	require.NoError(t, err)
 	require.Len(t, deps, 1)
 	assert.Equal(t, link, deps[0].ElfFile.Path.Abs(), "retain input alias for bundling")
-	deps, err = s.Scan(rootfs.MustPath(dirlink), nil)
+	deps, err = s.Scan(rootfs.MustPath(dirlink))
 	require.NoError(t, err)
 	require.Len(t, deps, 1)
 	assert.Equal(t, filepath.Join(dirlink, "program"), deps[0].ElfFile.Path.Abs())
 	cycle := filepath.Join(dir, "cycle")
 	require.NoError(t, os.Symlink("cycle", cycle))
-	_, err = s.Scan(rootfs.MustPath(cycle), nil)
-	var pathErr *os.PathError
-	require.ErrorAs(t, err, &pathErr)
-	assert.Equal(t, "stat", pathErr.Op)
-	assert.Equal(t, "cycle", filepath.Base(pathErr.Path))
-	assert.ErrorIs(t, err, syscall.ELOOP)
+	_, err = s.Scan(rootfs.MustPath(cycle))
+	require.ErrorContains(t, err, "circular symlink detected")
 }
 
 func TestScannerFailures(t *testing.T) {
 	dir := rootFSTempDir(t)
 	s := NewScanner(DI{FS: os.DirFS("/"), Query: unownedFilesQuery(t), Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: os.DirFS("/")})}).(*scanner)
 	missing := filepath.Join(dir, "missing")
-	_, err := s.Scan(rootfs.MustPath(missing), nil)
+	_, err := s.Scan(rootfs.MustPath(missing))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	_, _, err = s.handleFile(rootfs.MustPath(missing))
 	require.ErrorIs(t, err, os.ErrNotExist)
-	_, err = s.ScanDir(rootfs.MustPath(missing), nil)
+	_, err = s.scanDir(rootfs.MustPath(missing))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	require.NoError(t, os.Symlink("missing", filepath.Join(dir, "broken")))
-	_, err = s.Scan(rootfs.MustPath(dir), nil)
+	_, err = s.Scan(rootfs.MustPath(dir))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	nested := rootFSTempDir(t)
 	require.NoError(t, os.Mkdir(filepath.Join(nested, "child"), 0755))
 	require.NoError(t, os.Symlink("missing", filepath.Join(nested, "child", "broken")))
-	_, err = s.Scan(rootfs.MustPath(nested), nil)
+	_, err = s.Scan(rootfs.MustPath(nested))
 	require.ErrorIs(t, err, os.ErrNotExist, "propagate errors from nested directories")
 	file := filepath.Join(rootFSTempDir(t), "program")
 	writeTestELF(t, file, elf.ET_DYN, true)
@@ -149,16 +144,16 @@ func TestScannerFailures(t *testing.T) {
 		}
 		return &ExeTraceResult{BrokenLibs: []string{"missing"}}, nil
 	}}
-	_, err = s.Scan(rootfs.MustPath(file), nil)
+	_, err = s.Scan(rootfs.MustPath(file))
 	require.ErrorIs(t, err, failure)
-	deps, err := s.Scan(rootfs.MustPath(file), nil)
+	deps, err := s.Scan(rootfs.MustPath(file))
 	require.NoError(t, err)
 	require.Len(t, deps, 1)
 	assert.Equal(t, []string{"missing"}, deps[0].BrokenLibs)
 	assert.Equal(t, 2, calls, "failed traces must be retried")
 	s.finder = stubFinder{findPackage: func(string) (*dpkg.Package, error) { return nil, errPackageNotFound }, trace: func(string) (*ExeTraceResult, error) { return nil, failure }}
 	s.depsCache = make(map[rootfs.Path]*ElfDependency)
-	_, err = s.Scan(rootfs.MustPath(filepath.Dir(file)), nil)
+	_, err = s.Scan(rootfs.MustPath(filepath.Dir(file)))
 	require.ErrorIs(t, err, failure)
 }
 
@@ -171,7 +166,7 @@ func TestScannerDependencies(t *testing.T) {
 		assert.Equal(t, path, got)
 		return &ExeTraceResult{Dependencies: want}, nil
 	}}
-	got, err := s.Scan(rootfs.MustPath(path), nil)
+	got, err := s.Scan(rootfs.MustPath(path))
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, want, got[0].Dependencies)
@@ -192,10 +187,10 @@ func TestScannerRetriesFailedOwnerLookup(t *testing.T) {
 		return nil, nil
 	}
 	s := NewScanner(DI{FS: os.DirFS("/"), Query: d, Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: os.DirFS("/")})})
-	_, err := s.Scan(rootfs.MustPath(path), nil)
+	_, err := s.Scan(rootfs.MustPath(path))
 	require.ErrorIs(t, err, failure)
 	for range 2 {
-		deps, err := s.Scan(rootfs.MustPath(path), nil)
+		deps, err := s.Scan(rootfs.MustPath(path))
 		require.NoError(t, err)
 		require.Len(t, deps, 1)
 		assert.Nil(t, deps[0].Package)
@@ -212,7 +207,7 @@ func TestScannerMalformedDynamicSegment(t *testing.T) {
 		Progs: func(p []elf.Prog64) { elftest.Prog(p, elf.PT_DYNAMIC).Filesz += 1 << 20 },
 	})
 	s := NewScanner(DI{FS: os.DirFS("/"), Query: unownedFilesQuery(t), Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: os.DirFS("/")})})
-	_, err := s.Scan(rootfs.MustPath(path), nil)
+	_, err := s.Scan(rootfs.MustPath(path))
 	require.EqualError(t, err, "[ldd/readElf] malformed ELF file: "+path+": [ldd/readDynTable] truncated PT_DYNAMIC")
 }
 
@@ -229,13 +224,14 @@ func TestScannerExclusions(t *testing.T) {
 	di.Ldd = ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: di.FS})
 	s := NewScanner(di)
 	excludes := rootfs.MustPaths(excluded, ignoredFile)
-	deps, err := s.Scan(rootfs.MustPath(dir), excludes)
+	s.SetExcludes(rootfs.NewPathSet(excludes))
+	deps, err := s.Scan(rootfs.MustPath(dir))
 	require.NoError(t, err)
 	require.Len(t, deps, 1)
 	assert.Equal(t, kept, deps[0].ElfFile.Path.Abs())
 
 	for _, path := range []string{excluded, filepath.Join(excluded, "broken"), ignoredFile} {
-		deps, err := s.Scan(rootfs.MustPath(path), excludes)
+		deps, err := s.Scan(rootfs.MustPath(path))
 		require.NoError(t, err)
 		assert.Empty(t, deps)
 	}

@@ -94,7 +94,7 @@ func (c *app) command() *cli.Command {
 			},
 			{
 				Name:      "bundle",
-				ArgsUsage: "BUNDLE [executable...]",
+				ArgsUsage: "BUNDLE [files or directories...]",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:     "out",
@@ -103,24 +103,16 @@ func (c *app) command() *cli.Command {
 						Required: true,
 					},
 					&cli.StringSliceFlag{
-						Name:  "scan",
-						Usage: "Executable or directories to scan for dependencies.",
-					},
-					&cli.StringSliceFlag{
-						Name:  "exclude-scan",
-						Usage: "Files or directories to exclude from scanning.",
-					},
-					&cli.StringSliceFlag{
 						Name:  "package",
 						Usage: "Packages to include in the root filesystem",
 					},
 					&cli.StringSliceFlag{
-						Name:  "copy",
-						Usage: "Files or directories to copy into the root filesystem.",
+						Name:  "exclude",
+						Usage: "Files or directories to exclude from the root filesystem.",
 					},
 					&cli.StringSliceFlag{
-						Name:  "exclude-copy",
-						Usage: "Files or directories to exclude from copying.",
+						Name:  "exclude-scan",
+						Usage: "Files or directories to exclude from scanning.",
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -128,13 +120,11 @@ func (c *app) command() *cli.Command {
 						return err
 					}
 					return c.bundle(bistro.BundleInput{
-						Out:           c.absPath(cmd.String("out")),
-						Files:         c.rootfsPaths(cmd.Args().Slice()),
-						Scans:         c.rootfsPaths(cmd.StringSlice("scan")),
-						Packages:      cmd.StringSlice("package"),
-						Copies:        c.rootfsPaths(cmd.StringSlice("copy")),
-						ExcludeScans:  c.rootfsPaths(cmd.StringSlice("exclude-scan")),
-						ExcludeCopies: c.rootfsPaths(cmd.StringSlice("exclude-copy")),
+						Out:          rootfs.MustPath(c.absPath(cmd.String("out"))),
+						Files:        c.rootfsPaths(cmd.Args().Slice()),
+						Packages:     cmd.StringSlice("package"),
+						Excludes:     c.rootfsPaths(cmd.StringSlice("exclude")),
+						ExcludeScans: c.rootfsPaths(cmd.StringSlice("exclude-scan")),
 					})
 				},
 			},
@@ -148,9 +138,10 @@ func (c *app) Run(ctx context.Context, args []string) error {
 
 func (c *app) scan(paths []rootfs.Path, excludes []rootfs.Path) ([]*bistro.ElfDependency, error) {
 	scanner := bistro.NewScanner(c.DI)
+	scanner.SetExcludes(rootfs.NewPathSet(excludes))
 	var elfDeps []*bistro.ElfDependency
 	for _, path := range paths {
-		deps, err := scanner.Scan(path, excludes)
+		deps, err := scanner.Scan(path)
 		if err != nil {
 			return nil, err
 		}
@@ -207,14 +198,9 @@ func (c *app) scanList(paths []rootfs.Path, excludes []rootfs.Path, flat bool) e
 }
 
 func (c *app) scanTree(paths []rootfs.Path, excludes []rootfs.Path) error {
-	scanner := bistro.NewScanner(c.DI)
-	var elfDeps []*bistro.ElfDependency
-	for _, path := range paths {
-		deps, err := scanner.Scan(path, excludes)
-		if err != nil {
-			return err
-		}
-		elfDeps = append(elfDeps, deps...)
+	elfDeps, err := c.scan(paths, excludes)
+	if err != nil {
+		return err
 	}
 	for _, elfDep := range elfDeps {
 		c.printf("%s\n", elfDep.ElfFile.Path)
@@ -254,8 +240,7 @@ func (c *app) errorf(format string, args ...any) {
 }
 
 func (c *app) bundle(input bistro.BundleInput) error {
-	bundler := bistro.NewBundler(c.DI)
-	return bundler.Bundle(input)
+	return bistro.Bundle(c.DI, input)
 }
 
 func (c *app) absPath(p string) string {

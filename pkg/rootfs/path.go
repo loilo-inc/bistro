@@ -84,6 +84,10 @@ func (p Path) Abs() string {
 	return path.Join("/", p.value)
 }
 
+func (p Path) Base() string {
+	return path.Base(p.value)
+}
+
 func (p Path) String() string {
 	return p.Abs()
 }
