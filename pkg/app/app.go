@@ -94,7 +94,7 @@ func (c *app) command() *cli.Command {
 			},
 			{
 				Name:      "bundle",
-				ArgsUsage: "BUNDLE [executable...]",
+				ArgsUsage: "BUNDLE [files or directories...]",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:     "out",

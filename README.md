@@ -26,6 +26,27 @@ ENTRYPOINT ["/usr/local/bin/ruby"]
 CMD ["-v"]
 ```
 
+## Efficacy
+
+In the example above, `bistro bundle` reduced the image size by 86% and CVEs by 99% while preserving SBOM (Software Bill of Materials) information.
+
+```console
+$ docker images | grep ruby
+bistro/ruby:4.0  701a33fa4c27   205MB  60.1MB
+ruby:4.0         d8279d65457f  1.65GB   437MB  U
+```
+
+Vulnerabilities were measured using Docker Scout on November 7, 2026.
+
+| Vulnerabilities | `ruby:4.0` | `bistro/ruby:4.0` |
+| --- | ---: | ---: |
+| Total | 279 in 47 packages | 2 in 1 package |
+| Critical | 2 | 0 |
+| High | 28 | 1 |
+| Medium | 25 | 0 |
+| Low | 208 | 1 |
+| Unspecified | 16 | — |
+
 ## Usage
 
 ### `bistro scan`
@@ -73,7 +94,7 @@ Here is an example script for bundling the `chromium` browser:
 bistro bundle -o /chromium.rootfs.tar \
   --package chromium \
   --package chromium-common \
-  /usr/lib/chromium /var/some/file
+  /usr/lib/chromium
 ```
 
 - `--package` adds a Debian package to the tarball.
