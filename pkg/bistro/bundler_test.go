@@ -100,6 +100,39 @@ func TestBundlerPackageOnly(t *testing.T) {
 	assert.Equal(t, "font data", readBundleTar(t, out)[rootFSArchiveName(file)].body)
 }
 
+func TestBundlerNoScan(t *testing.T) {
+	dir := rootFSTempDir(t)
+	program := filepath.Join(dir, "program")
+	tree := filepath.Join(dir, "tree")
+	extension := filepath.Join(tree, "extension.so")
+	font := filepath.Join(dir, "font.ttf")
+	writeTestELF(t, program, elf.ET_EXEC, true)
+	writeTestELF(t, extension, elf.ET_DYN, false, "missing.so")
+	writeRootFSFile(t, font, "font data", 0644)
+	pkg := testPackage(t, "fonts", "", "", dpkg.StatusInstalled)
+	d := packageFilesFixture(t, []*dpkg.Package{pkg}, map[string][]string{pkg.NameWithArch(): {font}})
+	b := newTestBundler(DI{FS: d.fs, Query: d.query})
+	b.scanner = stubScanner(func(string) ([]*ElfDependency, error) {
+		t.Fatal("scanner must not be called when NoScan is enabled")
+		return nil, nil
+	})
+	out := filepath.Join(dir, "bundle.tar")
+	b.BundleInput = BundleInput{
+		Out: rootfs.MustPath(out), Files: rootfs.MustPaths(program, tree),
+		Packages: []string{pkg.NameWithArch()}, NoScan: true,
+	}
+
+	require.NoError(t, b.bundle())
+	entries := readBundleTar(t, out)
+	for _, file := range []string{program, extension} {
+		data, err := os.ReadFile(file)
+		require.NoError(t, err)
+		assert.Equal(t, string(data), entries[rootFSArchiveName(file)].body)
+	}
+	assert.Equal(t, "font data", entries[rootFSArchiveName(font)].body)
+	assert.Contains(t, entries, "var/lib/dpkg/status.d/fonts")
+}
+
 func TestBundlerCopyExclusions(t *testing.T) {
 	dir := rootFSTempDir(t)
 	source := filepath.Join(dir, "source")

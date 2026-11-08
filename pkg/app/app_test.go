@@ -338,54 +338,74 @@ func TestBundleExcludeFlags(t *testing.T) {
 }
 
 func TestBundleInputFlags(t *testing.T) {
-	fixture := newAppFixture(t)
-	fixture.input.Cwd = t.TempDir()
-	executable := (elftest.Fixture{Static: true}).Bytes()
-	fixture.input.DI.FS = fstest.MapFS{
-		"var/lib/dpkg/info/alpha.list":      {Data: []byte("/workspace/share/alpha.txt\n")},
-		"var/lib/dpkg/info/beta:arm64.list": {Data: []byte("/workspace/share/beta.txt\n")},
-		"workspace/share/alpha.txt":         {Data: []byte("alpha content")},
-		"workspace/share/beta.txt":          {Data: []byte("beta content")},
-		"workspace/bin/app":                 {Mode: 0755, Data: executable},
-		"workspace/scan-one/app":            {Data: (elftest.Fixture{}).Bytes()},
-		"workspace/scan-two":                {Data: (elftest.Fixture{}).Bytes()},
-	}
-	packages, err := dpkg.ParseStatus("Package: alpha\nArchitecture: all\nStatus: install ok installed\n\nPackage: beta\nArchitecture: arm64\nMulti-Arch: same\nStatus: install ok installed\n")
-	require.NoError(t, err)
-	require.Len(t, packages, 2)
-	var requested []string
-	fixture.query.GetFunc = func(name string) (*dpkg.Package, error) {
-		requested = append(requested, name)
-		for _, pkg := range packages {
-			if pkg.NameWithArch() == name {
-				return pkg, nil
+	for _, tc := range []struct {
+		name   string
+		noScan bool
+	}{
+		{name: "default"},
+		{name: "no scan", noScan: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newAppFixture(t)
+			fixture.input.Cwd = t.TempDir()
+			executable := (elftest.Fixture{Static: true}).Bytes()
+			fixture.input.DI.FS = fstest.MapFS{
+				"var/lib/dpkg/info/alpha.list":      {Data: []byte("/workspace/share/alpha.txt\n")},
+				"var/lib/dpkg/info/beta:arm64.list": {Data: []byte("/workspace/share/beta.txt\n")},
+				"workspace/share/alpha.txt":         {Data: []byte("alpha content")},
+				"workspace/share/beta.txt":          {Data: []byte("beta content")},
+				"workspace/bin/app":                 {Mode: 0755, Data: executable},
+				"workspace/scan-one/app":            {Data: (elftest.Fixture{}).Bytes()},
+				"workspace/scan-two":                {Data: (elftest.Fixture{}).Bytes()},
 			}
-		}
-		t.Fatalf("unexpected package: %s", name)
-		return nil, nil
+			packages, err := dpkg.ParseStatus("Package: alpha\nArchitecture: all\nStatus: install ok installed\n\nPackage: beta\nArchitecture: arm64\nMulti-Arch: same\nStatus: install ok installed\n")
+			require.NoError(t, err)
+			require.Len(t, packages, 2)
+			var requested []string
+			fixture.query.GetFunc = func(name string) (*dpkg.Package, error) {
+				requested = append(requested, name)
+				for _, pkg := range packages {
+					if pkg.NameWithArch() == name {
+						return pkg, nil
+					}
+				}
+				t.Fatalf("unexpected package: %s", name)
+				return nil, nil
+			}
+			if !tc.noScan {
+				fixture.query.LookUpFunc = func(string) (*dpkg.Package, error) { return nil, nil }
+			}
+			var scanned []rootfs.Path
+			fixture.resolver.ListObjectsFunc = func(name rootfs.Path) ([]*ldd.Library, error) {
+				scanned = append(scanned, name)
+				return nil, nil
+			}
+			args := []string{"bundle", "--out", "bundle.tar",
+				"--package", "alpha", "--package", "beta:arm64"}
+			if tc.noScan {
+				args = append(args, "--no-scan")
+			}
+			args = append(args, "/workspace/bin/app", "/workspace/scan-one", "/workspace/scan-two")
+			require.NoError(t, fixture.run(args...))
+			assert.Equal(t, []string{"alpha", "beta:arm64"}, requested)
+			if tc.noScan {
+				assert.Empty(t, scanned)
+			} else {
+				assert.Equal(t, rootfs.MustPaths("/workspace/bin/app", "/workspace/scan-one/app", "/workspace/scan-two"), scanned)
+			}
+			assert.Equal(t, 1, fixture.query.Loads)
+			assert.Equal(t, 1, fixture.resolver.Loads)
+			entries := readArchiveFiles(t, filepath.Join(fixture.input.Cwd, "bundle.tar"))
+			assert.Len(t, entries, 9)
+			assert.Equal(t, string(executable), entries["workspace/bin/app"])
+			assert.Equal(t, "alpha content", entries["workspace/share/alpha.txt"])
+			assert.Equal(t, "beta content", entries["workspace/share/beta.txt"])
+			for _, name := range []string{"alpha", "beta"} {
+				assert.Contains(t, entries, "var/lib/dpkg/status.d/"+name)
+				assert.Contains(t, entries, "var/lib/dpkg/status.d/"+name+".md5sums")
+			}
+			assert.Contains(t, entries, "workspace/scan-one/app")
+			assert.Contains(t, entries, "workspace/scan-two")
+		})
 	}
-	fixture.query.LookUpFunc = func(string) (*dpkg.Package, error) { return nil, nil }
-	var scanned []rootfs.Path
-	fixture.resolver.ListObjectsFunc = func(name rootfs.Path) ([]*ldd.Library, error) {
-		scanned = append(scanned, name)
-		return nil, nil
-	}
-	require.NoError(t, fixture.run("bundle", "--out", "bundle.tar",
-		"--package", "alpha", "--package", "beta:arm64",
-		"/workspace/bin/app", "/workspace/scan-one", "/workspace/scan-two"))
-	assert.Equal(t, []string{"alpha", "beta:arm64"}, requested)
-	assert.Equal(t, rootfs.MustPaths("/workspace/bin/app", "/workspace/scan-one/app", "/workspace/scan-two"), scanned)
-	assert.Equal(t, 1, fixture.query.Loads)
-	assert.Equal(t, 1, fixture.resolver.Loads)
-	entries := readArchiveFiles(t, filepath.Join(fixture.input.Cwd, "bundle.tar"))
-	assert.Len(t, entries, 9)
-	assert.Equal(t, string(executable), entries["workspace/bin/app"])
-	assert.Equal(t, "alpha content", entries["workspace/share/alpha.txt"])
-	assert.Equal(t, "beta content", entries["workspace/share/beta.txt"])
-	for _, name := range []string{"alpha", "beta"} {
-		assert.Contains(t, entries, "var/lib/dpkg/status.d/"+name)
-		assert.Contains(t, entries, "var/lib/dpkg/status.d/"+name+".md5sums")
-	}
-	assert.Contains(t, entries, "workspace/scan-one/app")
-	assert.Contains(t, entries, "workspace/scan-two")
 }
