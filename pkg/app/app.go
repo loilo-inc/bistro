@@ -114,6 +114,10 @@ func (c *app) command() *cli.Command {
 						Name:  "exclude-scan",
 						Usage: "Files or directories to exclude from scanning.",
 					},
+					&cli.BoolFlag{
+						Name:  "no-scan",
+						Usage: "Disable scanning for ELF dependencies",
+					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if err := c.load(); err != nil {
@@ -125,6 +129,7 @@ func (c *app) command() *cli.Command {
 						Packages:     cmd.StringSlice("package"),
 						Excludes:     c.rootfsPaths(cmd.StringSlice("exclude")),
 						ExcludeScans: c.rootfsPaths(cmd.StringSlice("exclude-scan")),
+						NoScan:       cmd.Bool("no-scan"),
 					})
 				},
 			},

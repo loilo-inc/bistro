@@ -13,6 +13,7 @@ type BundleInput struct {
 	Out          rootfs.Path
 	Files        []rootfs.Path
 	Packages     []string
+	NoScan       bool
 	Excludes     []rootfs.Path
 	ExcludeScans []rootfs.Path
 }
@@ -57,11 +58,14 @@ func Bundle(di DI, input BundleInput) error {
 
 func (b *bundler) bundle() error {
 	for _, file := range b.Files {
-		deps, err := b.scanner.Scan(file)
-		if err != nil {
+		if err := b.addFile(file); err != nil {
 			return err
 		}
-		if err := b.addFile(file); err != nil {
+		if b.NoScan {
+			continue
+		}
+		deps, err := b.scanner.Scan(file)
+		if err != nil {
 			return err
 		}
 		if err := b.addDependency(deps); err != nil {
