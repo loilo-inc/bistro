@@ -3,9 +3,11 @@ package bistro
 import (
 	"debug/elf"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/internal/elftest"
@@ -104,11 +106,11 @@ func TestScannerSymlinks(t *testing.T) {
 	deps, err := s.Scan(rootfs.MustPath(link))
 	require.NoError(t, err)
 	require.Len(t, deps, 1)
-	assert.Equal(t, link, deps[0].ElfFile.Path.Abs(), "retain input alias for bundling")
+	assert.Equal(t, file, deps[0].ElfFile.Path.Abs(), "scan the resolved regular file")
 	deps, err = s.Scan(rootfs.MustPath(dirlink))
 	require.NoError(t, err)
 	require.Len(t, deps, 1)
-	assert.Equal(t, filepath.Join(dirlink, "program"), deps[0].ElfFile.Path.Abs())
+	assert.Equal(t, file, deps[0].ElfFile.Path.Abs())
 	cycle := filepath.Join(dir, "cycle")
 	require.NoError(t, os.Symlink("cycle", cycle))
 	_, err = s.Scan(rootfs.MustPath(cycle))
@@ -122,8 +124,6 @@ func TestScannerFailures(t *testing.T) {
 	_, err := s.Scan(rootfs.MustPath(missing))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	_, _, err = s.handleFile(rootfs.MustPath(missing))
-	require.ErrorIs(t, err, os.ErrNotExist)
-	_, err = s.scanDir(rootfs.MustPath(missing))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	require.NoError(t, os.Symlink("missing", filepath.Join(dir, "broken")))
 	_, err = s.Scan(rootfs.MustPath(dir))
@@ -234,5 +234,89 @@ func TestScannerExclusions(t *testing.T) {
 		deps, err := s.Scan(rootfs.MustPath(path))
 		require.NoError(t, err)
 		assert.Empty(t, deps)
+	}
+}
+
+func TestScannerDeduplicatesResolvedELFFiles(t *testing.T) {
+	for _, aliasName := range []string{"alias", "z-alias"} {
+		t.Run(aliasName, func(t *testing.T) {
+			dir := rootFSTempDir(t)
+			program := filepath.Join(dir, "program")
+			writeTestELF(t, program, elf.ET_EXEC, false)
+			require.NoError(t, os.Symlink("program", filepath.Join(dir, aliasName)))
+			calls := 0
+			resolver := teststub.NewResolver(t)
+			resolver.ListObjectsFunc = func(p rootfs.Path) ([]*ldd.Library, error) {
+				calls++
+				require.Equal(t, program, p.Abs())
+				return nil, nil
+			}
+			scanner := NewScanner(DI{FS: os.DirFS("/"), Query: unownedFilesQuery(t), Ldd: resolver})
+			for range 2 {
+				deps, err := scanner.Scan(rootfs.MustPath(dir))
+				require.NoError(t, err)
+				require.Len(t, deps, 1, "alias ordering must not change the result count")
+				require.Equal(t, program, deps[0].ElfFile.Path.Abs())
+			}
+			require.Equal(t, 1, calls, "dependency results should remain cached across scans")
+		})
+	}
+}
+
+func TestScannerTraversesNestedDirectoryAliases(t *testing.T) {
+	dir := rootFSTempDir(t)
+	tree := filepath.Join(dir, "tree")
+	outside := filepath.Join(dir, "outside")
+	program := filepath.Join(outside, "program")
+	writeTestELF(t, program, elf.ET_EXEC, false)
+	require.NoError(t, os.Mkdir(tree, 0755))
+	require.NoError(t, os.Symlink("../outside", filepath.Join(tree, "plugins")))
+	require.NoError(t, os.Symlink("../tree", filepath.Join(outside, "back")))
+	scanner := NewScanner(DI{FS: os.DirFS("/"), Query: unownedFilesQuery(t), Ldd: ldd.NewResolver(ldd.ResolverOptions{Cwd: "/", FS: os.DirFS("/")})})
+	deps, err := scanner.Scan(rootfs.MustPath(tree))
+	require.NoError(t, err)
+	require.Len(t, deps, 1)
+	require.Equal(t, program, deps[0].ElfFile.Path.Abs())
+	scanner.SetExcludes(rootfs.NewPathSet(rootfs.MustPaths(outside)))
+	deps, err = scanner.Scan(rootfs.MustPath(tree))
+	require.NoError(t, err)
+	require.Empty(t, deps, "excluded directory targets must not be scanned")
+}
+
+// Fail immediately if scanning tries to open a special file, without a blocking FIFO fixture.
+type specialFileGuardFS struct {
+	fs.FS
+	opens int
+}
+
+func (f *specialFileGuardFS) Lstat(name string) (fs.FileInfo, error) { return fs.Lstat(f.FS, name) }
+func (f *specialFileGuardFS) ReadLink(name string) (string, error)   { return fs.ReadLink(f.FS, name) }
+func (f *specialFileGuardFS) Open(name string) (fs.File, error) {
+	info, err := fs.Stat(f.FS, name)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() && !info.Mode().IsRegular() {
+		f.opens++
+		return nil, errors.New("special file must not be opened for ELF scanning")
+	}
+	return f.FS.Open(name)
+}
+
+func TestScannerSkipsSpecialFilesBeforeOpening(t *testing.T) {
+	for _, mode := range []fs.FileMode{fs.ModeNamedPipe, fs.ModeSocket, fs.ModeDevice | fs.ModeCharDevice} {
+		t.Run(mode.String(), func(t *testing.T) {
+			fss := &specialFileGuardFS{FS: fstest.MapFS{
+				"tree/special": {Mode: mode | 0600},
+				"alias":        {Mode: fs.ModeSymlink | 0777, Data: []byte("tree/special")},
+			}}
+			scanner := NewScanner(DI{FS: fss})
+			for _, p := range []string{"/tree/special", "/alias", "/tree"} {
+				deps, err := scanner.Scan(rootfs.MustPath(p))
+				require.NoError(t, err)
+				require.Empty(t, deps)
+			}
+			require.Zero(t, fss.opens)
+		})
 	}
 }

@@ -23,7 +23,7 @@ type Archiver interface {
 }
 
 type archiver struct {
-	traverser *fileTraverser
+	traverser *traverser
 	copied    util.Map[Path, bool]
 	excludes  PathSet
 	tw        *tar.Writer
@@ -39,10 +39,10 @@ var _ Archiver = &archiver{}
 
 func NewArchiver(fs fs.FS, out io.Writer) Archiver {
 	r := &archiver{
-		tw:        tar.NewWriter(out),
-		fs:        fs,
-		traverser: newFileTraverser(fs),
+		tw: tar.NewWriter(out),
+		fs: fs,
 	}
+	r.traverser = NewTraverser(fs, r.shouldCopyFile, r.copyOne)
 	return r
 }
 
@@ -51,11 +51,11 @@ func (r *archiver) SetExcludes(excludes PathSet) {
 }
 
 func (r *archiver) Copy(path Path) error {
-	return r.traverser.Walk(path, r.shouldCopyFile, r.copyOne)
+	return r.traverser.Walk(path)
 }
 
 func (r *archiver) CopyRecursive(path Path) error {
-	return r.traverser.Traverse(path, r.shouldCopyFile, r.copyOne)
+	return r.traverser.Traverse(path)
 }
 
 func (r *archiver) Add(path Path, content []byte, mode fs.FileMode) error {
