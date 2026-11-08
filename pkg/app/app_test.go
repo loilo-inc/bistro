@@ -156,14 +156,14 @@ func TestCommandLoadFailures(t *testing.T) {
 	}
 }
 
-func TestBundleCopyFlags(t *testing.T) {
+func TestBundlePositionalFiles(t *testing.T) {
 	fixture := newAppFixture(t)
 	fixture.input.DI.FS = fstest.MapFS{
 		"workspace/first":  {Data: []byte("first content")},
 		"workspace/second": {Data: []byte("second content")},
 	}
 	out := filepath.Join(t.TempDir(), "bundle.tar")
-	require.NoError(t, fixture.run("bundle", "-o", out, "--copy", "first", "--copy", "second"))
+	require.NoError(t, fixture.run("bundle", "-o", out, "first", "second"))
 	assert.Equal(t, 1, fixture.query.Loads)
 	assert.Equal(t, 1, fixture.resolver.Loads)
 	assert.Equal(t, map[string]string{
@@ -325,14 +325,13 @@ func TestBundleExcludeFlags(t *testing.T) {
 	}
 	out := filepath.Join(t.TempDir(), "bundle.tar")
 	require.NoError(t, fixture.run("bundle", "-o", out,
-		"--scan", "content", "--scan", "content/cache/app", "--scan", "content/scan-only",
-		"--copy", "content", "--copy", "content/cache/app", "--copy", "content/copy-only",
-		"--exclude-scan", "content/cache", "--exclude-scan", "/workspace/content/scan-only",
-		"--exclude-copy", "content/cache", "--exclude-copy", "/workspace/content/copy-only"))
-	assert.Equal(t, rootfs.MustPaths("/workspace/content/cache-old/app", "/workspace/content/copy-only"), scanned)
+		"--exclude", "content/cache", "--exclude", "/workspace/content/scan-only",
+		"--exclude-scan", "/workspace/content/copy-only",
+		"content", "content/cache/app", "content/scan-only", "content/copy-only"))
+	assert.Equal(t, rootfs.MustPaths("/workspace/content/cache-old/app"), scanned)
 	assert.Equal(t, map[string]string{
 		"workspace/content/cache-old/app": string(executable),
-		"workspace/content/scan-only":     string(executable),
+		"workspace/content/copy-only":     string(executable),
 	}, readArchiveFiles(t, out))
 	assert.Empty(t, fixture.stdout.String())
 	assert.Empty(t, fixture.stderr.String())
@@ -372,14 +371,14 @@ func TestBundleInputFlags(t *testing.T) {
 		return nil, nil
 	}
 	require.NoError(t, fixture.run("bundle", "--out", "bundle.tar",
-		"--scan", "/workspace/scan-one", "--scan", "/workspace/scan-two",
-		"--package", "alpha", "--package", "beta:arm64", "/workspace/bin/app"))
+		"--package", "alpha", "--package", "beta:arm64",
+		"/workspace/bin/app", "/workspace/scan-one", "/workspace/scan-two"))
 	assert.Equal(t, []string{"alpha", "beta:arm64"}, requested)
 	assert.Equal(t, rootfs.MustPaths("/workspace/bin/app", "/workspace/scan-one/app", "/workspace/scan-two"), scanned)
 	assert.Equal(t, 1, fixture.query.Loads)
 	assert.Equal(t, 1, fixture.resolver.Loads)
 	entries := readArchiveFiles(t, filepath.Join(fixture.input.Cwd, "bundle.tar"))
-	assert.Len(t, entries, 7)
+	assert.Len(t, entries, 9)
 	assert.Equal(t, string(executable), entries["workspace/bin/app"])
 	assert.Equal(t, "alpha content", entries["workspace/share/alpha.txt"])
 	assert.Equal(t, "beta content", entries["workspace/share/beta.txt"])
@@ -387,6 +386,6 @@ func TestBundleInputFlags(t *testing.T) {
 		assert.Contains(t, entries, "var/lib/dpkg/status.d/"+name)
 		assert.Contains(t, entries, "var/lib/dpkg/status.d/"+name+".md5sums")
 	}
-	assert.NotContains(t, entries, "workspace/scan-one/app")
-	assert.NotContains(t, entries, "workspace/scan-two")
+	assert.Contains(t, entries, "workspace/scan-one/app")
+	assert.Contains(t, entries, "workspace/scan-two")
 }
