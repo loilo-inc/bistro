@@ -550,3 +550,83 @@ func TestArchiverCopyRecursiveExcludesSubtrees(t *testing.T) {
 	require.NotContains(t, entries, "tree/cache")
 	require.NotContains(t, entries, "tree/cache/asset")
 }
+
+// Reject reads of special files so this test cannot block on a FIFO.
+type specialFileReadGuardFS struct {
+	fs.FS
+	specialOpens int
+}
+
+func (f *specialFileReadGuardFS) Lstat(name string) (fs.FileInfo, error) {
+	return fs.Lstat(f.FS, name)
+}
+
+func (f *specialFileReadGuardFS) ReadLink(name string) (string, error) {
+	return fs.ReadLink(f.FS, name)
+}
+
+func (f *specialFileReadGuardFS) Open(name string) (fs.File, error) {
+	info, err := fs.Stat(f.FS, name)
+	if err != nil {
+		return nil, err
+	}
+	mode := info.Mode()
+	if !mode.IsDir() && !mode.IsRegular() {
+		f.specialOpens++
+		return nil, errors.New("special file contents must not be opened")
+	}
+	return f.FS.Open(name)
+}
+
+func TestArchiverSkipsSpecialFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode fs.FileMode
+	}{
+		{name: "FIFO", mode: fs.ModeNamedPipe},
+		{name: "socket", mode: fs.ModeSocket},
+		{name: "block device", mode: fs.ModeDevice},
+		{name: "character device", mode: fs.ModeDevice | fs.ModeCharDevice},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, recursive := range []bool{false, true} {
+				name := "Copy"
+				if recursive {
+					name = "CopyRecursive"
+				}
+				t.Run(name, func(t *testing.T) {
+					fss := &specialFileReadGuardFS{FS: fstest.MapFS{
+						"tree/special":      {Mode: tc.mode | 0600},
+						"tree/file":         {Data: []byte("asset"), Mode: 0640},
+						"tree/empty":        {Mode: fs.ModeDir | 0750},
+						"tree/link":         {Mode: fs.ModeSymlink | 0777, Data: []byte("file")},
+						"tree/special-link": {Mode: fs.ModeSymlink | 0777, Data: []byte("special")},
+					}}
+					var out bytes.Buffer
+					a := NewArchiver(fss, &out)
+					if recursive {
+						require.NoError(t, a.CopyRecursive(MustPath("/tree")))
+					} else {
+						for _, path := range []string{"/tree/special", "/tree/file", "/tree/empty", "/tree/link", "/tree/special-link"} {
+							require.NoError(t, a.Copy(MustPath(path)))
+						}
+					}
+					require.NoError(t, a.Close())
+					entries := readRootFSTar(t, out.Bytes())
+					require.NotContains(t, entries, "tree/special", "special files must not have archive headers")
+					require.Zero(t, fss.specialOpens)
+					require.Equal(t, "asset", entries["tree/file"].body)
+					require.Equal(t, int64(0640), entries["tree/file"].header.Mode)
+					require.Contains(t, entries, "tree/empty")
+					require.Equal(t, byte(tar.TypeDir), entries["tree/empty"].header.Typeflag)
+					require.Equal(t, int64(0750), entries["tree/empty"].header.Mode)
+					for _, link := range []struct{ name, target string }{{"tree/link", "file"}, {"tree/special-link", "special"}} {
+						require.Contains(t, entries, link.name, "symlink headers must remain intact")
+						require.Equal(t, byte(tar.TypeSymlink), entries[link.name].header.Typeflag)
+						require.Equal(t, link.target, entries[link.name].header.Linkname)
+					}
+				})
+			}
+		})
+	}
+}
