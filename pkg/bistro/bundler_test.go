@@ -175,7 +175,7 @@ func TestBundlerCollectsTargetPackage(t *testing.T) {
 				l := teststub.NewResolver(t)
 				l.ListObjectsFunc = func(path rootfs.Path) ([]*ldd.Library, error) {
 					traces++
-					assert.Equal(t, target, path.Abs())
+					assert.Equal(t, program, path.Abs())
 					return nil, nil
 				}
 				out := filepath.Join(dir, "bundle.tar")
@@ -507,7 +507,7 @@ func TestBundleScanExclusionThroughDirectoryAlias(t *testing.T) {
 		Out: rootfs.MustPath(out), Files: rootfs.MustPaths(alias, filepath.Join(alias, "nested", "tool")),
 		ExcludeScans: rootfs.MustPaths(tool),
 	}))
-	require.Equal(t, []string{filepath.Join(alias, "app")}, scanned)
+	require.Equal(t, []string{kept}, scanned)
 	entries := readBundleTar(t, out)
 	require.Contains(t, entries, rootFSArchiveName(tool), "scan exclusion must still copy the ELF")
 	require.Contains(t, entries, rootFSArchiveName(kept))

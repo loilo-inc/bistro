@@ -6,35 +6,39 @@ import (
 	"github.com/loilo-inc/bistro/pkg/util"
 )
 
-type fileTraverser struct {
+type Traverser interface {
+	// Walk starts walking the given path, resolving symlinks along the way.
+	Walk(path Path) error
+	// Traverse starts traversing the given path recursively, resolving symlinks along the way.
+	Traverse(path Path) error
+}
+
+type traverser struct {
 	fs      fs.FS
+	walker  *symlinkWalker
 	visited util.Map[Path, bool]
 }
 
-func newFileTraverser(fs fs.FS) *fileTraverser {
-	return &fileTraverser{fs: fs}
+var _ Traverser = &traverser{}
+
+func NewTraverser(fs fs.FS,
+	onStart func(file Path) (bool, error),
+	onVisit func(file Path, link string, stat fs.FileInfo) error,
+) *traverser {
+	return &traverser{fs: fs, walker: newSymlinkVisitor(fs, onStart, onVisit)}
 }
 
-func (t *fileTraverser) Walk(
-	path Path,
-	onStart func(path Path) (bool, error),
-	onVisit func(path Path, link string, info fs.FileInfo) error,
-) error {
-	_, err := newSymlinkVisitor(t.fs, onStart, onVisit).Resolve(path)
+func (t *traverser) Walk(path Path) error {
+	_, err := t.walker.Resolve(path)
 	return err
 }
 
-func (t *fileTraverser) Traverse(
-	path Path,
-	onStart func(path Path) (bool, error),
-	onVisit func(path Path, link string, info fs.FileInfo) error,
-) error {
+func (t *traverser) Traverse(path Path) error {
 	if t.visited.Has(path) {
 		return nil
 	}
-	sym := newSymlinkVisitor(t.fs, onStart, onVisit)
 	// walk the symlink and find the destination of the path
-	dest, err := sym.Resolve(path)
+	dest, err := t.walker.Resolve(path)
 	if err != nil {
 		return err
 	}
@@ -59,7 +63,7 @@ func (t *fileTraverser) Traverse(
 		}
 		for _, entry := range entries {
 			entryPath := dest.Join(entry.Name())
-			if err := t.Traverse(entryPath, onStart, onVisit); err != nil {
+			if err := t.Traverse(entryPath); err != nil {
 				return err
 			}
 		}
