@@ -38,7 +38,7 @@ ruby:4.0         d8279d65457f  1.65GB   437MB  U
 
 Vulnerabilities were measured using Docker Scout on November 7, 2026.
 
-| Vulnerabilities | `ruby:4.0` | `bistro/ruby:4.0` |
+| Vulnerabilities | `ruby:4.0` | `bistro-ruby:4.0` |
 | --- | ---: | ---: |
 | Total | 279 in 47 packages | 2 in 1 package |
 | Critical | 2 | 0 |
