@@ -32,7 +32,7 @@ In the example above, `bistro bundle` reduced the image size by 86% and CVEs by 
 
 ```console
 $ docker images | grep ruby
-bistro/ruby:4.0  701a33fa4c27   205MB  60.1MB
+bistro-ruby:4.0  701a33fa4c27   205MB  60.1MB
 ruby:4.0         d8279d65457f  1.65GB   437MB  U
 ```
 
@@ -82,7 +82,7 @@ The scan result shows that:
 bistro bundle -o ./python3.rootfs.tar /usr/bin/python3
 ```
 
-## Limitations
+#### Limitations
 
 `bistro bundle` cannot automatically collect every dependency. Many files are implicitly required by the application.
 
