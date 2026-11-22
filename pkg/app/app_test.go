@@ -231,23 +231,25 @@ func TestScanOutput(t *testing.T) {
 }
 
 func TestScanErrorsProduceNoPartialOutput(t *testing.T) {
-	for _, target := range []string{"absent", "dynamic"} {
-		t.Run(target, func(t *testing.T) {
-			fixture := newAppFixture(t)
-			fixture.files = fstest.MapFS{
-				"workspace/static":  {Data: (elftest.Fixture{Static: true}).Bytes()},
-				"workspace/dynamic": {Data: (elftest.Fixture{Entries: elftest.Needed("lib.so"), Omit: []elf.DynTag{elf.DT_STRTAB}}).Bytes()},
-			}
-			err := fixture.run("scan", "static", target)
-			require.Error(t, err)
-			if target == "absent" {
-				require.ErrorIs(t, err, fs.ErrNotExist)
-			} else {
-				require.ErrorContains(t, err, "DT_STRTAB is missing")
-			}
-			assert.Empty(t, fixture.stdout.String())
-			assert.Empty(t, fixture.stderr.String())
-		})
+	for _, format := range []string{"tree", "list", "flat"} {
+		for _, target := range []string{"absent", "dynamic"} {
+			t.Run(format+"/"+target, func(t *testing.T) {
+				fixture := newAppFixture(t)
+				fixture.files = fstest.MapFS{
+					"workspace/static":  {Data: (elftest.Fixture{Static: true}).Bytes()},
+					"workspace/dynamic": {Data: (elftest.Fixture{Entries: elftest.Needed("lib.so"), Omit: []elf.DynTag{elf.DT_STRTAB}}).Bytes()},
+				}
+				err := fixture.run("scan", "--format", format, "static", target)
+				require.Error(t, err)
+				if target == "absent" {
+					require.ErrorIs(t, err, fs.ErrNotExist)
+				} else {
+					require.ErrorContains(t, err, "DT_STRTAB is missing")
+				}
+				assert.Empty(t, fixture.stdout.String())
+				assert.Empty(t, fixture.stderr.String())
+			})
+		}
 	}
 }
 

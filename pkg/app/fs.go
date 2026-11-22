@@ -59,13 +59,11 @@ func openFs(input string) (FsHandle, error) {
 	if input == "" {
 		return &dirFsOpener{fs: os.DirFS("/")}, nil
 	}
-	if strings.HasPrefix(input, "dir:") {
-		path := strings.TrimPrefix(input, "dir:")
+	if path, ok := strings.CutPrefix(input, "dir:"); ok {
 		return &dirFsOpener{fs: os.DirFS(path)}, nil
 	}
 	// Pure tar archive
-	if strings.HasPrefix(input, "tar:") {
-		tarPath := strings.TrimPrefix(input, "tar:")
+	if tarPath, ok := strings.CutPrefix(input, "tar:"); ok {
 		file, err := os.Open(tarPath)
 		if err != nil {
 			return nil, err
@@ -81,8 +79,7 @@ func openFs(input string) (FsHandle, error) {
 		return &tarFsOpener{fs: tarFs, file: file}, nil
 	}
 	// OCI Image Layout
-	if strings.HasPrefix(input, "oci:") {
-		tarfile := strings.TrimPrefix(input, "oci:")
+	if tarfile, ok := strings.CutPrefix(input, "oci:"); ok {
 		img, err := tarball.ImageFromPath(tarfile, nil)
 		if err != nil {
 			return nil, err

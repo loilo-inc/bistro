@@ -2,6 +2,8 @@ package tarfs_test
 
 import (
 	"archive/tar"
+	"bytes"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -16,6 +18,7 @@ import (
 type entry struct {
 	name, body, link string
 	kind             byte
+	mode             int64
 }
 
 func newFS(t *testing.T, entries ...entry) fs.FS {
@@ -31,6 +34,9 @@ func newFS(t *testing.T, entries ...entry) fs.FS {
 		}
 		if kind == tar.TypeDir {
 			mode = 0755
+		}
+		if e.mode != 0 {
+			mode = e.mode
 		}
 		require.NoError(t, w.WriteHeader(&tar.Header{
 			Name: e.name, Typeflag: kind, Mode: mode,
@@ -97,9 +103,20 @@ func TestReadDir(t *testing.T) {
 					{name: prefix + "alias", kind: tar.TypeSymlink, link: "usr/share"},
 				}
 				if explicitRoot {
-					entries = append(entries, entry{name: ".", kind: tar.TypeDir})
+					rootName := "."
+					if prefix != "" {
+						rootName = prefix
+					}
+					entries = append(entries, entry{name: rootName, kind: tar.TypeDir, mode: 0700})
 				}
 				fss := newFS(t, entries...)
+				root, err := fs.Stat(fss, ".")
+				require.NoError(t, err)
+				if explicitRoot {
+					assert.Equal(t, fs.FileMode(0700), root.Mode().Perm())
+				} else {
+					assert.Equal(t, fs.FileMode(0755), root.Mode().Perm())
+				}
 				for _, tc := range []struct {
 					path string
 					want []string
@@ -124,7 +141,7 @@ func TestReadDir(t *testing.T) {
 					assert.Equal(t, tc.want, names, tc.path)
 				}
 				var files []string
-				err := fs.WalkDir(fss, ".", func(name string, e fs.DirEntry, err error) error {
+				err = fs.WalkDir(fss, ".", func(name string, e fs.DirEntry, err error) error {
 					if err != nil {
 						return err
 					}
@@ -181,11 +198,42 @@ func TestErrors(t *testing.T) {
 		func(name string) error { _, err := fs.ReadLink(fss, name); return err },
 	} {
 		require.ErrorIs(t, read("missing"), fs.ErrNotExist)
+		require.ErrorContains(t, read("../escape"), "path cannot start with '..'")
 	}
 	_, err := fs.ReadDir(fss, "file")
 	require.ErrorIs(t, err, fs.ErrInvalid)
 	_, err = fs.ReadLink(fss, "file")
 	require.ErrorIs(t, err, fs.ErrInvalid)
+}
+
+func TestNewRejectsParentTraversal(t *testing.T) {
+	var buf bytes.Buffer
+	w := tar.NewWriter(&buf)
+	require.NoError(t, w.WriteHeader(&tar.Header{Name: "../escape", Mode: 0644}))
+	require.NoError(t, w.Close())
+	fss, err := tarfs.New(bytes.NewReader(buf.Bytes()))
+	require.ErrorContains(t, err, "path cannot start with '..'")
+	require.Nil(t, fss)
+}
+
+type failingSeeker struct {
+	*bytes.Reader
+	err error
+}
+
+func (r failingSeeker) Seek(int64, int) (int64, error) {
+	return 0, r.err
+}
+
+func TestNewPropagatesSeekError(t *testing.T) {
+	var buf bytes.Buffer
+	w := tar.NewWriter(&buf)
+	require.NoError(t, w.WriteHeader(&tar.Header{Name: "file", Mode: 0644}))
+	require.NoError(t, w.Close())
+	failure := errors.New("seek failed")
+	fss, err := tarfs.New(failingSeeker{Reader: bytes.NewReader(buf.Bytes()), err: failure})
+	require.ErrorIs(t, err, failure)
+	require.Nil(t, fss)
 }
 
 func TestNewRejectsMalformedArchive(t *testing.T) {
