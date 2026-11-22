@@ -303,6 +303,63 @@ func TestHardLinks(t *testing.T) {
 	}
 }
 
+func TestOverwrittenHardLinks(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		oldTarget   string
+		replacement entry
+		wantType    fs.FileMode
+	}{
+		{"regular file", "old-target", entry{name: "alias", body: "new", mode: 0751}, 0},
+		{"normalized path", "old-target", entry{name: "./alias", body: "new", mode: 0751}, 0},
+		{"dangling link", "missing", entry{name: "alias", body: "new", mode: 0751}, 0},
+		{"self link", "alias", entry{name: "alias", body: "new", mode: 0751}, 0},
+		{"symlink", "old-target", entry{name: "alias", kind: tar.TypeSymlink, link: "new-target"}, fs.ModeSymlink},
+		{"hard link", "old-target", entry{name: "alias", kind: tar.TypeLink, link: "new-target"}, 0},
+		{"dangling link replaced by hard link", "missing", entry{name: "alias", kind: tar.TypeLink, link: "new-target"}, 0},
+		{"directory", "old-target", entry{name: "alias/", kind: tar.TypeDir, mode: 0700}, fs.ModeDir},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fss := newFS(t,
+				entry{name: "old-target", body: "old"},
+				entry{name: "alias", kind: tar.TypeLink, link: tc.oldTarget},
+				tc.replacement,
+				entry{name: "new-target", body: "new", mode: 0751},
+			)
+			info, err := fs.Lstat(fss, "alias")
+			require.NoError(t, err)
+			assert.Equal(t, "alias", info.Name())
+			assert.Equal(t, tc.wantType, info.Mode().Type())
+			if tc.wantType == fs.ModeDir {
+				assert.Equal(t, fs.FileMode(0700), info.Mode().Perm())
+				entries, err := fs.ReadDir(fss, "alias")
+				require.NoError(t, err)
+				assert.Empty(t, entries)
+			} else {
+				data, err := fs.ReadFile(fss, "alias")
+				require.NoError(t, err)
+				assert.Equal(t, "new", string(data))
+				if tc.wantType == fs.ModeSymlink {
+					link, err := fs.ReadLink(fss, "alias")
+					require.NoError(t, err)
+					assert.Equal(t, "new-target", link)
+				} else {
+					assert.Equal(t, fs.FileMode(0751), info.Mode().Perm())
+					assert.Equal(t, int64(3), info.Size())
+				}
+			}
+			entries, err := fs.ReadDir(fss, ".")
+			require.NoError(t, err)
+			require.Len(t, entries, 3)
+			assert.Equal(t, "alias", entries[0].Name())
+			assert.Equal(t, tc.wantType, entries[0].Type())
+			data, err := fs.ReadFile(fss, "old-target")
+			require.NoError(t, err)
+			assert.Equal(t, "old", string(data))
+		})
+	}
+}
+
 func TestHardLinkToSymlink(t *testing.T) {
 	fss := newFS(t,
 		entry{name: "b/alias", kind: tar.TypeLink, link: "a/link"},

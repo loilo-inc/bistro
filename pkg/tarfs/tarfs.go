@@ -177,6 +177,10 @@ func New(f Reader) (fs.FS, error) {
 
 	resolvedHardLinks := make(map[rootfs.Path]*tarEntry)
 	for _, link := range hardLinks {
+		// link has been replaced by another entry, skip it
+		if files[link.path] != link {
+			continue
+		}
 		var curr = link
 		visited := util.Map[rootfs.Path, bool]{}
 		for curr.hdr.Typeflag == tar.TypeLink {
