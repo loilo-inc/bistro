@@ -5,10 +5,13 @@ import (
 	"io"
 	"io/fs"
 	"path"
+
+	"github.com/loilo-inc/bistro/pkg/rootfs"
 )
 
 type tarEntry struct {
 	offset int64
+	path   rootfs.Path
 	hdr    *tar.Header
 }
 
@@ -43,6 +46,10 @@ func (t *tarFile) Close() error {
 
 func (t *tarFile) Read(p []byte) (int, error) {
 	return t.reader.Read(p)
+}
+
+func (t *tarFile) ReadAt(p []byte, off int64) (int, error) {
+	return t.reader.ReadAt(p, off)
 }
 
 func (t *tarFile) Stat() (fs.FileInfo, error) {

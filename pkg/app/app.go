@@ -4,16 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
-	"strings"
 
 	"github.com/loilo-inc/bistro/pkg/bistro"
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/ldd"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
-	"github.com/loilo-inc/bistro/pkg/tarfs"
-	"github.com/loilo-inc/bistro/pkg/util"
 	"github.com/urfave/cli/v3"
 )
 
@@ -32,7 +30,6 @@ type NewInput struct {
 	Commit  string
 	Date    string
 	Cwd     string
-	DI      bistro.DI
 	Stdout  io.Writer
 	Stderr  io.Writer
 }
@@ -41,11 +38,11 @@ func New(input NewInput) App {
 	return &app{NewInput: input}
 }
 
-func (c *app) load() error {
-	if err := c.DI.Query.Load(); err != nil {
+func load(di bistro.DI) error {
+	if err := di.Query.Load(); err != nil {
 		return err
 	}
-	if err := c.DI.Ldd.Load(); err != nil {
+	if err := di.Ldd.Load(); err != nil {
 		return err
 	}
 	return nil
@@ -80,34 +77,21 @@ func (c *app) command() *cli.Command {
 					if cmd.Args().Len() == 0 {
 						return fmt.Errorf("scan requires at least one file or directory")
 					}
-					tarball := cmd.String("fs")
-					if tarball != "" {
-						f, err := os.Open(tarball)
-						if err != nil {
-							return err
-						}
-						defer f.Close()
-						tarFs, err := tarfs.New(f)
-						if err != nil {
-							return err
-						}
-						c.DI.FS = tarFs
-					}
-					if err := c.load(); err != nil {
+					fsOpener, err := openFs(cmd.String("fs"))
+					if err != nil {
 						return err
 					}
+					defer fsOpener.Close()
+					fss := fsOpener.FS()
 					paths := c.rootfsPaths(cmd.Args().Slice())
 					excludes := c.rootfsPaths(cmd.StringSlice("exclude"))
 					format := cmd.String("format")
-					switch format {
-					case "list":
-						return c.scanList(paths, excludes, false)
-					case "flat":
-						return c.scanList(paths, excludes, true)
-					case "tree":
-						return c.scanTree(paths, excludes)
-					}
-					return fmt.Errorf("unknown format: %s", format)
+					return c.newScanApp(scanAppInput{
+						paths:    paths,
+						excludes: excludes,
+						format:   format,
+						fs:       fss,
+					}).Run(ctx)
 				},
 			},
 			{
@@ -132,16 +116,27 @@ func (c *app) command() *cli.Command {
 						Name:  "exclude-scan",
 						Usage: "Files or directories to exclude from scanning.",
 					},
+					&cli.StringFlag{
+						Name:  "fs",
+						Usage: "Root filesystem (Tarball) path",
+					},
 					&cli.BoolFlag{
 						Name:  "no-scan",
 						Usage: "Disable scanning for ELF dependencies",
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if err := c.load(); err != nil {
+					fsOpener, err := openFs(cmd.String("fs"))
+					if err != nil {
 						return err
 					}
-					return c.bundle(bistro.BundleInput{
+					defer fsOpener.Close()
+					fss := fsOpener.FS()
+					di := c.depsFromFs(fss)
+					if err := load(di); err != nil {
+						return err
+					}
+					return c.bundle(di, bistro.BundleInput{
 						Out:          rootfs.MustPath(c.absPath(cmd.String("out"))),
 						Files:        c.rootfsPaths(cmd.Args().Slice()),
 						Packages:     cmd.StringSlice("package"),
@@ -159,86 +154,20 @@ func (c *app) Run(ctx context.Context, args []string) error {
 	return c.command().Run(ctx, args)
 }
 
-func (c *app) scan(paths []rootfs.Path, excludes []rootfs.Path) ([]*bistro.ElfDependency, error) {
-	scanner := bistro.NewScanner(c.DI)
-	scanner.SetExcludes(rootfs.NewPathSet(excludes))
-	var elfDeps []*bistro.ElfDependency
-	for _, path := range paths {
-		deps, err := scanner.Scan(path)
-		if err != nil {
-			return nil, err
-		}
-		elfDeps = append(elfDeps, deps...)
+func (c *app) depsFromFs(fss fs.FS) bistro.DI {
+	ldd := ldd.NewResolver(ldd.ResolverOptions{
+		LdLibraryPath: os.Getenv("LD_LIBRARY_PATH"),
+		Cwd:           c.Cwd,
+		FS:            fss,
+	})
+	query := dpkg.NewQuery(fss)
+	logger := bistro.NewLogger(os.Stdout, os.Stderr)
+	return bistro.DI{
+		Logger: logger,
+		Ldd:    ldd,
+		Query:  query,
+		FS:     fss,
 	}
-	return elfDeps, nil
-}
-
-func (c *app) scanList(paths []rootfs.Path, excludes []rootfs.Path, flat bool) error {
-	list, err := c.scan(paths, excludes)
-	if err != nil {
-		return err
-	}
-	pkgs := util.Map[string, *dpkg.Package]{}
-	libs := util.Map[string, *ldd.Library]{}
-	joinDeps := func() string {
-		var deps []string
-		for _, pkg := range pkgs.Iter() {
-			deps = append(deps, pkg.NameWithArch())
-		}
-		for _, lib := range libs.Iter() {
-			deps = append(deps, lib.Path.Abs())
-		}
-		return strings.Join(deps, " ")
-	}
-	for _, elfDep := range list {
-		for _, exeDep := range elfDep.Dependencies {
-			if exeDep.Package != nil {
-				pkgs.Set(exeDep.Package.NameWithArch(), exeDep.Package)
-			} else {
-				libs.Set(exeDep.Library.Path.Abs(), exeDep.Library)
-			}
-		}
-		for _, broken := range elfDep.BrokenLibs {
-			c.errorf("[BROKEN] %s\n", broken)
-		}
-		var deps []string
-		for _, pkg := range pkgs.Iter() {
-			deps = append(deps, pkg.NameWithArch())
-		}
-		for _, lib := range libs.Iter() {
-			deps = append(deps, lib.Path.Abs())
-		}
-		if !flat {
-			c.printf("%s: %s\n", elfDep.ElfFile.Path, joinDeps())
-			pkgs.Clear()
-			libs.Clear()
-		}
-	}
-	if flat {
-		c.printf("%s\n", joinDeps())
-	}
-	return nil
-}
-
-func (c *app) scanTree(paths []rootfs.Path, excludes []rootfs.Path) error {
-	elfDeps, err := c.scan(paths, excludes)
-	if err != nil {
-		return err
-	}
-	for _, elfDep := range elfDeps {
-		c.printf("%s\n", elfDep.ElfFile.Path)
-		for _, exeDep := range elfDep.Dependencies {
-			pkgName := "<none>"
-			if exeDep.Package != nil {
-				pkgName = exeDep.Package.NameWithArch()
-			}
-			c.printf("  %s => %s\n", exeDep.Library.Path, pkgName)
-		}
-		for _, broken := range elfDep.BrokenLibs {
-			c.errorf("  [BROKEN] %s\n", broken)
-		}
-	}
-	return nil
 }
 
 func (c *app) stdout() io.Writer {
@@ -262,8 +191,8 @@ func (c *app) errorf(format string, args ...any) {
 	fmt.Fprintf(c.stderr(), format, args...)
 }
 
-func (c *app) bundle(input bistro.BundleInput) error {
-	return bistro.Bundle(c.DI, input)
+func (c *app) bundle(di bistro.DI, input bistro.BundleInput) error {
+	return bistro.Bundle(di, input)
 }
 
 func (c *app) absPath(p string) string {
