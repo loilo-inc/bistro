@@ -12,6 +12,7 @@ import (
 	"github.com/loilo-inc/bistro/pkg/dpkg"
 	"github.com/loilo-inc/bistro/pkg/ldd"
 	"github.com/loilo-inc/bistro/pkg/rootfs"
+	"github.com/loilo-inc/bistro/pkg/tarfs"
 	"github.com/loilo-inc/bistro/pkg/util"
 	"github.com/urfave/cli/v3"
 )
@@ -66,6 +67,10 @@ func (c *app) command() *cli.Command {
 						Usage:   "Output format (list, flat, tree)",
 						Value:   "tree",
 					},
+					&cli.StringFlag{
+						Name:  "fs",
+						Usage: "Root filesystem (Tarball) path",
+					},
 					&cli.StringSliceFlag{
 						Name:  "exclude",
 						Usage: "Files or directories to exclude from scanning.",
@@ -74,6 +79,19 @@ func (c *app) command() *cli.Command {
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() == 0 {
 						return fmt.Errorf("scan requires at least one file or directory")
+					}
+					tarball := cmd.String("fs")
+					if tarball != "" {
+						f, err := os.Open(tarball)
+						if err != nil {
+							return err
+						}
+						defer f.Close()
+						tarFs, err := tarfs.New(f)
+						if err != nil {
+							return err
+						}
+						c.DI.FS = tarFs
 					}
 					if err := c.load(); err != nil {
 						return err
