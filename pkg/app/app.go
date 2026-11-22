@@ -52,7 +52,7 @@ func (c *app) command() *cli.Command {
 	var rootFs string
 	rootFsFlag := &cli.StringFlag{
 		Name:        "rootfs",
-		Usage:       "Root filesystem (Tarball) path",
+		Usage:       "Root filesystem: dir:<path>, tar:<path>, or oci:<tar-path> from docker save (default: dir:/)",
 		Destination: &rootFs,
 	}
 	return &cli.Command{
