@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -21,12 +22,10 @@ type entry struct {
 	mode             int64
 }
 
-func newFS(t *testing.T, entries ...entry) fs.FS {
+func newArchive(t *testing.T, entries ...entry) *bytes.Reader {
 	t.Helper()
-	f, err := os.CreateTemp(t.TempDir(), "archive-*.tar")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, f.Close()) })
-	w := tar.NewWriter(f)
+	var buf bytes.Buffer
+	w := tar.NewWriter(&buf)
 	for _, e := range entries {
 		kind, mode := e.kind, int64(0644)
 		if kind == 0 {
@@ -46,9 +45,12 @@ func newFS(t *testing.T, entries ...entry) fs.FS {
 		require.NoError(t, err)
 	}
 	require.NoError(t, w.Close())
-	_, err = f.Seek(0, io.SeekStart)
-	require.NoError(t, err)
-	fss, err := tarfs.New(f)
+	return bytes.NewReader(buf.Bytes())
+}
+
+func newFS(t *testing.T, entries ...entry) fs.FS {
+	t.Helper()
+	fss, err := tarfs.New(newArchive(t, entries...))
 	require.NoError(t, err)
 	return fss
 }
@@ -246,4 +248,186 @@ func TestNewRejectsMalformedArchive(t *testing.T) {
 	require.NoError(t, err)
 	_, err = tarfs.New(f)
 	require.Error(t, err)
+}
+
+func TestHardLinks(t *testing.T) {
+	target := entry{name: "data/original", body: "payload", mode: 0751}
+	alias := entry{name: "bin/alias", kind: tar.TypeLink, link: "data/original"}
+	for _, tc := range []struct {
+		name    string
+		entries []entry
+	}{
+		{"backward", []entry{target, alias}},
+		{"forward", []entry{alias, target}},
+		{"chain", []entry{
+			{name: "bin/alias", kind: tar.TypeLink, link: "data/second"},
+			{name: "data/second", kind: tar.TypeLink, link: "data/original"},
+			target,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fss := newFS(t, tc.entries...)
+			for _, path := range []string{"bin/alias", "data/original"} {
+				data, err := fs.ReadFile(fss, path)
+				require.NoError(t, err)
+				assert.Equal(t, "payload", string(data))
+			}
+			info, err := fs.Stat(fss, "bin/alias")
+			require.NoError(t, err)
+			assert.Equal(t, "alias", info.Name())
+			assert.Equal(t, int64(7), info.Size())
+			assert.Equal(t, fs.FileMode(0751), info.Mode())
+			info, err = fs.Lstat(fss, "data/original")
+			require.NoError(t, err)
+			assert.Equal(t, "original", info.Name(), "resolving an alias must preserve the target header")
+			entries, err := fs.ReadDir(fss, "bin")
+			require.NoError(t, err)
+			require.Len(t, entries, 1)
+			assert.Equal(t, "alias", entries[0].Name())
+			assert.True(t, entries[0].Type().IsRegular())
+			info, err = entries[0].Info()
+			require.NoError(t, err)
+			assert.Equal(t, int64(7), info.Size())
+			assert.Equal(t, fs.FileMode(0751), info.Mode())
+			f, err := fss.Open("bin/alias")
+			require.NoError(t, err)
+			defer f.Close()
+			ra, ok := f.(io.ReaderAt)
+			require.True(t, ok)
+			buf := make([]byte, 3)
+			n, err := ra.ReadAt(buf, 2)
+			require.NoError(t, err)
+			assert.Equal(t, 3, n)
+			assert.Equal(t, "ylo", string(buf))
+		})
+	}
+}
+
+func TestHardLinkToSymlink(t *testing.T) {
+	fss := newFS(t,
+		entry{name: "b/alias", kind: tar.TypeLink, link: "a/link"},
+		entry{name: "a/link", kind: tar.TypeSymlink, link: "target"},
+		entry{name: "a/target", body: "original directory"},
+		entry{name: "b/target", body: "alias directory"},
+	)
+	link, err := fs.ReadLink(fss, "b/alias")
+	require.NoError(t, err)
+	assert.Equal(t, "target", link)
+	info, err := fs.Lstat(fss, "b/alias")
+	require.NoError(t, err)
+	assert.Equal(t, "alias", info.Name())
+	assert.Equal(t, fs.ModeSymlink, info.Mode().Type())
+	data, err := fs.ReadFile(fss, "b/alias")
+	require.NoError(t, err)
+	assert.Equal(t, "alias directory", string(data), "relative symlinks resolve from the alias directory")
+	data, err = fs.ReadFile(fss, "a/link")
+	require.NoError(t, err)
+	assert.Equal(t, "original directory", string(data))
+	entries, err := fs.ReadDir(fss, "b")
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	assert.Equal(t, "alias", entries[0].Name())
+	assert.Equal(t, fs.ModeSymlink, entries[0].Type())
+}
+
+func TestHardLinkToDanglingSymlink(t *testing.T) {
+	fss := newFS(t,
+		entry{name: "alias", kind: tar.TypeLink, link: "symlink"},
+		entry{name: "symlink", kind: tar.TypeSymlink, link: "missing"},
+	)
+	link, err := fs.ReadLink(fss, "alias")
+	require.NoError(t, err)
+	assert.Equal(t, "missing", link)
+	_, err = fs.ReadFile(fss, "alias")
+	require.ErrorIs(t, err, fs.ErrNotExist)
+}
+
+func TestNewRejectsInvalidHardLinks(t *testing.T) {
+	var longChain []entry
+	for i := 0; i < 300; i++ {
+		longChain = append(longChain, entry{
+			name: fmt.Sprintf("link%d", i), kind: tar.TypeLink, link: fmt.Sprintf("link%d", i+1),
+		})
+	}
+	longChain = append(longChain, entry{name: "link300", body: "payload"})
+	for _, tc := range []struct {
+		name    string
+		entries []entry
+		want    error
+	}{
+		{"missing", []entry{{name: "alias", kind: tar.TypeLink, link: "missing"}}, fs.ErrNotExist},
+		{"self", []entry{{name: "alias", kind: tar.TypeLink, link: "alias"}}, fs.ErrInvalid},
+		{"cycle", []entry{
+			{name: "alias", kind: tar.TypeLink, link: "second"},
+			{name: "second", kind: tar.TypeLink, link: "alias"},
+		}, fs.ErrInvalid},
+		{"too many links", longChain, fs.ErrInvalid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fss, err := tarfs.New(newArchive(t, tc.entries...))
+			require.ErrorIs(t, err, tc.want)
+			require.Nil(t, fss)
+			var pathErr *fs.PathError
+			require.ErrorAs(t, err, &pathErr)
+			assert.Equal(t, "link", pathErr.Op)
+			assert.NotEmpty(t, pathErr.Path)
+		})
+	}
+}
+
+func TestImplicitParentDirectories(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		entries []entry
+		usrMode fs.FileMode
+	}{
+		{"no directory headers", []entry{{name: "usr/bin/app", body: "payload"}}, 0755},
+		{"explicit root", []entry{
+			{name: ".", kind: tar.TypeDir},
+			{name: "usr/bin/app", body: "payload"},
+		}, 0755},
+		{"explicit parent before child", []entry{
+			{name: "usr/", kind: tar.TypeDir, mode: 0700},
+			{name: "usr/bin/app", body: "payload"},
+		}, 0700},
+		{"explicit parent after child", []entry{
+			{name: "usr/bin/app", body: "payload"},
+			{name: "usr/", kind: tar.TypeDir, mode: 0700},
+		}, 0700},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fss := newFS(t, tc.entries...)
+			data, err := fs.ReadFile(fss, "usr/bin/app")
+			require.NoError(t, err)
+			assert.Equal(t, "payload", string(data))
+			for _, path := range []string{".", "usr", "usr/bin"} {
+				info, err := fs.Stat(fss, path)
+				require.NoError(t, err, path)
+				assert.True(t, info.IsDir(), path)
+			}
+			info, err := fs.Stat(fss, "usr")
+			require.NoError(t, err)
+			assert.Equal(t, tc.usrMode, info.Mode().Perm())
+			var paths []string
+			err = fs.WalkDir(fss, ".", func(path string, _ fs.DirEntry, err error) error {
+				if err == nil {
+					paths = append(paths, path)
+				}
+				return err
+			})
+			require.NoError(t, err)
+			assert.Equal(t, []string{".", "usr", "usr/bin", "usr/bin/app"}, paths)
+		})
+	}
+}
+
+func TestEmptyArchiveHasRoot(t *testing.T) {
+	fss := newFS(t)
+	info, err := fs.Stat(fss, ".")
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+	assert.Equal(t, fs.FileMode(0755), info.Mode().Perm())
+	entries, err := fs.ReadDir(fss, ".")
+	require.NoError(t, err)
+	assert.Empty(t, entries)
 }

@@ -46,18 +46,6 @@ func TestOpenFsImageArchive(t *testing.T) {
 	require.Equal(t, status, string(data))
 }
 
-func TestOpenFsRelativeDirectory(t *testing.T) {
-	t.Chdir(t.TempDir())
-	require.NoError(t, os.Mkdir("root", 0755))
-	require.NoError(t, os.WriteFile("root/hello", []byte("hello"), 0644))
-	opener, err := openFs("dir:root")
-	require.NoError(t, err)
-	defer opener.Close()
-	data, err := fs.ReadFile(opener.FS(), "hello")
-	require.NoError(t, err)
-	require.Equal(t, "hello", string(data))
-}
-
 func TestCommandRootfsPrefixes(t *testing.T) {
 	t.Setenv("LD_LIBRARY_PATH", "")
 	root := t.TempDir()
@@ -67,46 +55,14 @@ func TestCommandRootfsPrefixes(t *testing.T) {
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(root, "var/lib/dpkg/status"), nil, 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "usr/bin/app"), content, 0755))
-	archive := filepath.Join(t.TempDir(), "rootfs.tar")
-	f, err := os.Create(archive)
-	require.NoError(t, err)
-	w := tar.NewWriter(f)
-	err = fs.WalkDir(os.DirFS(root), ".", func(path string, e fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		info, err := e.Info()
-		if err != nil {
-			return err
-		}
-		hdr, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return err
-		}
-		hdr.Name = path
-		if err := w.WriteHeader(hdr); err != nil {
-			return err
-		}
-		if !e.IsDir() {
-			data, err := os.ReadFile(filepath.Join(root, path))
-			if err != nil {
-				return err
-			}
-			_, err = w.Write(data)
-			return err
-		}
-		return nil
-	})
-	require.NoError(t, err)
-	require.NoError(t, w.Close())
-	require.NoError(t, f.Close())
+	archive := writeRootfsTar(t, os.DirFS(root))
 	layer, err := tarball.LayerFromFile(archive)
 	require.NoError(t, err)
 	img, err := mutate.AppendLayers(empty.Image, layer)
 	require.NoError(t, err)
 	imageArchive := filepath.Join(t.TempDir(), "image.tar")
 	require.NoError(t, tarball.WriteToFile(imageArchive, name.MustParseReference("example:test"), img))
-	for _, input := range []string{"dir:" + root, "tar:" + archive, "oci:" + imageArchive} {
+	for _, input := range []string{"tar:" + archive, "oci:" + imageArchive} {
 		for _, command := range []string{"scan", "bundle"} {
 			t.Run(command+"/"+input[:3], func(t *testing.T) {
 				var stdout, stderr bytes.Buffer
@@ -213,7 +169,7 @@ func TestOpenFsErrors(t *testing.T) {
 	dir := t.TempDir()
 	malformed := filepath.Join(dir, "malformed.tar")
 	require.NoError(t, os.WriteFile(malformed, []byte("not a tar archive"), 0644))
-	for _, input := range []string{"rootfs.tar", "unknown:rootfs.tar", "tar:" + filepath.Join(dir, "missing"), "tar:" + malformed, "oci:" + malformed} {
+	for _, input := range []string{"rootfs.tar", "unknown:rootfs.tar", "dir:/", "tar:" + filepath.Join(dir, "missing"), "tar:" + malformed, "oci:" + malformed} {
 		t.Run(input, func(t *testing.T) {
 			handle, err := openFs(input)
 			require.Error(t, err)
@@ -280,4 +236,42 @@ func TestScanRejectsUnknownFormat(t *testing.T) {
 	require.EqualError(t, err, "unknown format: unknown")
 	require.Empty(t, fixture.stdout.String())
 	require.Empty(t, fixture.stderr.String())
+}
+
+func writeRootfsTar(t *testing.T, fss fs.FS) string {
+	t.Helper()
+	archive := filepath.Join(t.TempDir(), "rootfs.tar")
+	f, err := os.Create(archive)
+	require.NoError(t, err)
+	w := tar.NewWriter(f)
+	err = fs.WalkDir(fss, ".", func(path string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := e.Info()
+		if err != nil {
+			return err
+		}
+		hdr, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		hdr.Name = path
+		if err := w.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if !e.IsDir() {
+			data, err := fs.ReadFile(fss, path)
+			if err != nil {
+				return err
+			}
+			_, err = w.Write(data)
+			return err
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	require.NoError(t, f.Close())
+	return archive
 }

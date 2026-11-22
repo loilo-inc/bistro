@@ -84,6 +84,10 @@ func (p Path) Abs() string {
 	return path.Join("/", p.value)
 }
 
+func (p Path) IsRoot() bool {
+	return p.Abs() == "/"
+}
+
 func (p Path) Base() string {
 	return path.Base(p.value)
 }

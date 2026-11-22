@@ -52,7 +52,7 @@ func (c *app) command() *cli.Command {
 	var rootFs string
 	rootFsFlag := &cli.StringFlag{
 		Name:        "rootfs",
-		Usage:       "Root filesystem: dir:<path>, tar:<path>, or oci:<tar-path> from docker save (default: dir:/)",
+		Usage:       "Root filesystem: tar:<path> or oci:<tar-path> from docker save (default: host filesystem)",
 		Destination: &rootFs,
 	}
 	return &cli.Command{
@@ -161,13 +161,8 @@ func (c *app) depsFromFs(fss fs.FS) bistro.DI {
 		FS:            fss,
 	})
 	query := dpkg.NewQuery(fss)
-	logger := bistro.NewLogger(os.Stdout, os.Stderr)
-	return bistro.DI{
-		Logger: logger,
-		Ldd:    ldd,
-		Query:  query,
-		FS:     fss,
-	}
+	logger := bistro.NewLogger(c.stdout(), c.stderr())
+	return bistro.NewDI(logger, ldd, query, fss)
 }
 
 func (c *app) stdout() io.Writer {

@@ -58,7 +58,8 @@ func (f *appFixture) run(args ...string) error {
 		require.NoError(f.t, os.WriteFile(dest, file.Data, mode))
 	}
 	if len(args) > 0 && (args[0] == "scan" || args[0] == "bundle") {
-		args = append([]string{args[0], "--rootfs", "dir:" + f.root}, args[1:]...)
+		archive := writeRootfsTar(f.t, os.DirFS(f.root))
+		args = append([]string{args[0], "--rootfs", "tar:" + archive}, args[1:]...)
 	}
 	return New(f.input).Run(context.Background(), append([]string{"bistro"}, args...))
 }
@@ -152,7 +153,7 @@ func TestCommandLoadFailures(t *testing.T) {
 				if stage == "dpkg" {
 					var pathErr *fs.PathError
 					require.ErrorAs(t, err, &pathErr)
-					assert.Contains(t, pathErr.Path, "var/lib/dpkg/status")
+					assert.Contains(t, pathErr.Path, "var/lib")
 				} else {
 					require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 				}

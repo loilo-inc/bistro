@@ -101,7 +101,7 @@ bistro bundle -o /chromium.rootfs.tar \
 
 ### `--rootfs`
 
-Both `scan` and `bundle` accept `--rootfs` to read a directory (`dir:`), a rootfs tarball (`tar:`), or a Docker image tar archive created with `docker save` (`oci:`). Defaults to the host filesystem (`dir:/`).
+Both `scan` and `bundle` accept `--rootfs` to read a rootfs tarball (`tar:`) or a Docker image tar archive created with `docker save` (`oci:`). Defaults to the host filesystem.
 
 ```bash
 docker save -o debian.tar debian:latest

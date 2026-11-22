@@ -2,12 +2,13 @@ package tarfs
 
 import (
 	"archive/tar"
-	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"slices"
 
 	"github.com/loilo-inc/bistro/pkg/rootfs"
+	"github.com/loilo-inc/bistro/pkg/util"
 )
 
 type Reader interface {
@@ -64,7 +65,7 @@ func (t *tarFS) ReadLink(name string) (string, error) {
 	if f.hdr.Typeflag == tar.TypeSymlink {
 		return f.hdr.Linkname, nil
 	}
-	return "", fmt.Errorf("[tarfs] %s: %w", name, fs.ErrInvalid)
+	return "", &fs.PathError{Op: "readlink", Path: name, Err: fs.ErrInvalid}
 }
 
 func (t *tarFS) Stat(name string) (fs.FileInfo, error) {
@@ -89,7 +90,7 @@ func (t *tarFS) ReadDir(name string) ([]fs.DirEntry, error) {
 		return nil, err
 	}
 	if dir.hdr.Typeflag != tar.TypeDir {
-		return nil, fmt.Errorf("[tarfs] %s: %w", name, fs.ErrInvalid)
+		return nil, &fs.PathError{Op: "read", Path: name, Err: fs.ErrInvalid}
 	}
 	return t.dirEntries[dir.path], nil
 }
@@ -102,7 +103,7 @@ func (t *tarFS) getFile(name string) (*tarEntry, error) {
 	if f, ok := t.files[p]; ok {
 		return f, nil
 	}
-	return nil, fmt.Errorf("[tarfs] %s: %w", name, fs.ErrNotExist)
+	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 }
 
 func (t *tarFS) resolveFile(name string) (*tarEntry, error) {
@@ -120,9 +121,11 @@ func (t *tarFS) resolveFile(name string) (*tarEntry, error) {
 func New(f Reader) (fs.FS, error) {
 	tr := tar.NewReader(f)
 	var files = make(map[rootfs.Path]*tarEntry)
-	var hasRoot bool
 	var result = &tarFS{tarFile: f}
-	var dirEntries = make(map[rootfs.Path][]fs.DirEntry)
+	var missingDirs = util.Map[rootfs.Path, *tarEntry]{}
+	var hardLinks []*tarEntry
+	var hasRoot bool
+
 	for {
 		hdr, err := tr.Next()
 		if err != nil {
@@ -141,19 +144,82 @@ func New(f Reader) (fs.FS, error) {
 		}
 		file := &tarEntry{offset: offset, path: path, hdr: hdr}
 		files[path] = file
-		if path.Abs() != "/" {
+		missingDirs.Delete(path)
+
+		if hdr.Typeflag == tar.TypeLink {
+			hardLinks = append(hardLinks, file)
+		}
+
+		if path.IsRoot() {
+			hasRoot = true
+		}
+
+		// Ensure all ancestor directories exist in files or missingDirs.
+		for dir := path.Dir(); !dir.IsRoot(); dir = dir.Dir() {
+			if _, ok := files[dir]; !ok && !missingDirs.Has(dir) {
+				hdr := &tar.Header{
+					Name:     dir.TarName(),
+					Typeflag: tar.TypeDir,
+					Mode:     0755,
+				}
+				missingDirs.Set(dir, &tarEntry{path: dir, hdr: hdr})
+			}
+		}
+	}
+
+	if !hasRoot {
+		path := rootfs.MustPath("/")
+		missingDirs.Set(path, &tarEntry{
+			path: path,
+			hdr:  &tar.Header{Name: path.TarName(), Typeflag: tar.TypeDir, Mode: 0755},
+		})
+	}
+
+	resolvedHardLinks := make(map[rootfs.Path]*tarEntry)
+	for _, link := range hardLinks {
+		var curr = link
+		visited := util.Map[rootfs.Path, bool]{}
+		for curr.hdr.Typeflag == tar.TypeLink {
+			// too many links
+			if visited.Size() > 256 {
+				return nil, &fs.PathError{Op: "link", Path: link.path.Path(), Err: fs.ErrInvalid}
+			}
+			// cycle
+			if visited.Has(curr.path) {
+				return nil, &fs.PathError{Op: "link", Path: link.path.Path(), Err: fs.ErrInvalid}
+			}
+			visited.Set(curr.path, true)
+			linkname, err := rootfs.NewPath(curr.hdr.Linkname)
+			if err != nil {
+				return nil, err
+			}
+			next, ok := files[linkname]
+			if !ok {
+				return nil, &fs.PathError{Op: "link", Path: link.path.Path(), Err: fs.ErrNotExist}
+			}
+			curr = next
+		}
+		newHdr := *curr.hdr
+		newHdr.Name = link.hdr.Name
+		newEntry := &tarEntry{
+			offset: curr.offset,
+			path:   link.path,
+			hdr:    &newHdr,
+		}
+		resolvedHardLinks[link.path] = newEntry
+	}
+	maps.Copy(files, resolvedHardLinks)
+
+	maps.Insert(files, missingDirs.Iter())
+
+	var dirEntries = make(map[rootfs.Path][]fs.DirEntry)
+	for path, file := range files {
+		if !path.IsRoot() {
 			dir := path.Dir()
 			dirEntries[dir] = append(dirEntries[dir], file)
 		}
-		if path.Abs() == "/" {
-			hasRoot = true
-		}
 	}
-	if !hasRoot {
-		hdr := &tar.Header{Name: ".", Typeflag: tar.TypeDir, Mode: 0755}
-		path := rootfs.MustPath("/")
-		files[path] = &tarEntry{offset: 0, path: path, hdr: hdr}
-	}
+
 	for _, entries := range dirEntries {
 		slices.SortFunc(entries, func(a, b fs.DirEntry) int {
 			if a.Name() < b.Name() {
@@ -165,6 +231,7 @@ func New(f Reader) (fs.FS, error) {
 			return 0
 		})
 	}
+
 	result.files = files
 	result.dirEntries = dirEntries
 	return result, nil

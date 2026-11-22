@@ -18,15 +18,15 @@ type FsHandle interface {
 	Close() error
 }
 
-type dirFsOpener struct {
+type hostFsHandle struct {
 	fs fs.FS
 }
 
-func (d *dirFsOpener) FS() fs.FS {
+func (d *hostFsHandle) FS() fs.FS {
 	return d.fs
 }
 
-func (d *dirFsOpener) Close() error {
+func (d *hostFsHandle) Close() error {
 	return nil
 }
 
@@ -52,15 +52,12 @@ func (t *tarFsOpener) Close() error {
 
 // openFs opens a filesystem based on the input string.
 // Supported formats:
-// - "" or "dir:/path/to/dir" for local directories
+// - "" for the host filesystem
 // - "tar:/path/to/tarfile" for tar archives
 // - "oci:/path/to/oci/image" for OCI image layouts (actually tar archives)
 func openFs(input string) (FsHandle, error) {
 	if input == "" {
-		return &dirFsOpener{fs: os.DirFS("/")}, nil
-	}
-	if path, ok := strings.CutPrefix(input, "dir:"); ok {
-		return &dirFsOpener{fs: os.DirFS(path)}, nil
+		return &hostFsHandle{fs: os.DirFS("/")}, nil
 	}
 	// Pure tar archive
 	if tarPath, ok := strings.CutPrefix(input, "tar:"); ok {
