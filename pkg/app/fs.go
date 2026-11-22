@@ -1,17 +1,19 @@
 package app
 
 import (
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path"
+	"strings"
 
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/loilo-inc/bistro/pkg/tarfs"
 )
 
-type FsOpener interface {
+type FsHandle interface {
 	FS() fs.FS
 	Close() error
 }
@@ -29,8 +31,9 @@ func (d *dirFsOpener) Close() error {
 }
 
 type tarFsOpener struct {
-	fs   fs.FS
-	file *os.File
+	fs         fs.FS
+	file       *os.File
+	removeFile bool
 }
 
 func (t *tarFsOpener) FS() fs.FS {
@@ -40,13 +43,46 @@ func (t *tarFsOpener) FS() fs.FS {
 func (t *tarFsOpener) Close() error {
 	if t.file != nil {
 		t.file.Close()
-		return os.Remove(t.file.Name())
+		if t.removeFile {
+			os.Remove(t.file.Name())
+		}
 	}
 	return nil
 }
 
-func openFs(tarfile string) (FsOpener, error) {
-	if tarfile != "" {
+// openFs opens a filesystem based on the input string.
+// Supported formats:
+// - "" or "dir:/path/to/dir" for local directories
+// - "tar:/path/to/tarfile" for tar archives
+// - "oci:/path/to/oci/image" for OCI image layouts (actually tar archives)
+func openFs(input string) (FsHandle, error) {
+	if input == "" {
+		return &dirFsOpener{fs: os.DirFS("/")}, nil
+	}
+	if strings.HasPrefix(input, "dir:") {
+		path := strings.TrimPrefix(input, "dir:")
+		return &dirFsOpener{fs: os.DirFS(path)}, nil
+	}
+	// Pure tar archive
+	if strings.HasPrefix(input, "tar:") {
+		tarPath := strings.TrimPrefix(input, "tar:")
+		file, err := os.Open(tarPath)
+		if err != nil {
+			return nil, err
+		}
+		cleanup := func() {
+			file.Close()
+		}
+		tarFs, err := tarfs.New(file)
+		if err != nil {
+			cleanup()
+			return nil, err
+		}
+		return &tarFsOpener{fs: tarFs, file: file}, nil
+	}
+	// OCI Image Layout
+	if strings.HasPrefix(input, "oci:") {
+		tarfile := strings.TrimPrefix(input, "oci:")
 		img, err := tarball.ImageFromPath(tarfile, nil)
 		if err != nil {
 			return nil, err
@@ -75,7 +111,7 @@ func openFs(tarfile string) (FsOpener, error) {
 			cleanup()
 			return nil, err
 		}
-		return &tarFsOpener{fs: tarFs, file: tmpFile}, nil
+		return &tarFsOpener{fs: tarFs, file: tmpFile, removeFile: true}, nil
 	}
-	return &dirFsOpener{fs: os.DirFS("/")}, nil
+	return nil, fmt.Errorf("unsupported input format: %s", input)
 }

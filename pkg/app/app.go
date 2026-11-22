@@ -49,6 +49,12 @@ func load(di bistro.DI) error {
 }
 
 func (c *app) command() *cli.Command {
+	var rootFs string
+	rootFsFlag := &cli.StringFlag{
+		Name:        "rootfs",
+		Usage:       "Root filesystem (Tarball) path",
+		Destination: &rootFs,
+	}
 	return &cli.Command{
 		Name:    "bistro",
 		Usage:   "Build a distroless root filesystem",
@@ -64,10 +70,7 @@ func (c *app) command() *cli.Command {
 						Usage:   "Output format (list, flat, tree)",
 						Value:   "tree",
 					},
-					&cli.StringFlag{
-						Name:  "fs",
-						Usage: "Root filesystem (Tarball) path",
-					},
+					rootFsFlag,
 					&cli.StringSliceFlag{
 						Name:  "exclude",
 						Usage: "Files or directories to exclude from scanning.",
@@ -77,7 +80,7 @@ func (c *app) command() *cli.Command {
 					if cmd.Args().Len() == 0 {
 						return fmt.Errorf("scan requires at least one file or directory")
 					}
-					fsOpener, err := openFs(cmd.String("fs"))
+					fsOpener, err := openFs(rootFs)
 					if err != nil {
 						return err
 					}
@@ -116,22 +119,19 @@ func (c *app) command() *cli.Command {
 						Name:  "exclude-scan",
 						Usage: "Files or directories to exclude from scanning.",
 					},
-					&cli.StringFlag{
-						Name:  "fs",
-						Usage: "Root filesystem (Tarball) path",
-					},
+					rootFsFlag,
 					&cli.BoolFlag{
 						Name:  "no-scan",
 						Usage: "Disable scanning for ELF dependencies",
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					fsOpener, err := openFs(cmd.String("fs"))
+					fsHandle, err := openFs(rootFs)
 					if err != nil {
 						return err
 					}
-					defer fsOpener.Close()
-					fss := fsOpener.FS()
+					defer fsHandle.Close()
+					fss := fsHandle.FS()
 					di := c.depsFromFs(fss)
 					if err := load(di); err != nil {
 						return err
